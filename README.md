@@ -7,18 +7,19 @@ A first MVP scaffold for an internal admin/review tool to identify publications 
 - Next.js (App Router)
 - TypeScript
 - Tailwind CSS
+- Supabase (Postgres + REST API)
 
-## Implemented in this MVP
+## MVP Status (Current)
 
 - Homepage with workflow cards
 - Top navigation across app sections
-- Faculty roster upload page with:
-  - CSV file upload
-  - Required-column validation
-  - Friendly validation errors
-  - Table preview of uploaded rows
+- Faculty roster page with:
+  - CSV upload and required-column validation
+  - Save-to-Supabase action after validation
+  - Success/error messaging for load/save
+  - Preview of uploaded rows
+  - Live list of currently stored faculty rows from Supabase
 - Placeholder pages for Publication Search, Results, and Export
-- Comments in code for planned PubMed and Supabase integration points
 
 ## Required Faculty Roster Columns
 
@@ -29,6 +30,24 @@ A first MVP scaffold for an internal admin/review tool to identify publications 
 - `primary_department`
 - `status`
 
+## Supabase Setup
+
+1. Create a Supabase project.
+2. In Supabase SQL editor, run `docs/supabase-faculty-schema.sql`.
+   - This creates a `public.faculty` table with the MVP roster fields.
+3. Create local environment variables:
+
+```bash
+cp .env.local.example .env.local
+```
+
+4. Fill in values from Supabase **Settings → API**:
+
+- `NEXT_PUBLIC_SUPABASE_URL`
+- `NEXT_PUBLIC_SUPABASE_ANON_KEY`
+
+> The app uses Supabase REST endpoints from the browser for this MVP. In a later step, move write operations to secure server endpoints/RPC with audit/version handling.
+
 ## Run Locally
 
 ```bash
@@ -38,8 +57,12 @@ npm run dev
 
 Then open http://localhost:3000.
 
-## Notes for Future Implementation
+## Faculty Roster Data Notes
 
-- PubMed matching will use `last_name + first_initial` and University of Michigan affiliation criteria.
-- A publication should only count when the matched faculty author (not only another co-author) is tied to U-M affiliation.
-- Supabase will be used for roster storage, run tracking, and results persistence.
+- Current MVP behavior treats each roster upload as a refresh of the active list by upserting on `email`.
+- Future enhancement should add true replacement logic (including row removals) and upload history/versioning in a transaction-safe flow.
+
+## Future Scope (Not Included Yet)
+
+- PubMed matching using `last_name + first_initial` and University of Michigan affiliation criteria.
+- Publication results persistence and export.
