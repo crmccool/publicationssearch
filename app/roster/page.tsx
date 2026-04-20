@@ -1,17 +1,16 @@
 "use client";
 
-import { ChangeEvent, useMemo, useState } from "react";
+import { ChangeEvent, useEffect, useMemo, useState } from "react";
+
+import { listFacultyRows, saveFacultyRows } from "@/lib/supabase/client";
+import { FacultyRecord, REQUIRED_COLUMNS } from "@/lib/types/faculty";
 
 type CsvRow = Record<string, string>;
 
-const REQUIRED_COLUMNS = [
-  "email",
-  "first_name",
-  "last_name",
-  "first_initial",
-  "primary_department",
-  "status",
-] as const;
+type Message = {
+  kind: "success" | "error";
+  text: string;
+};
 
 function parseCsvLine(line: string): string[] {
   const cells: string[] = [];
@@ -67,16 +66,53 @@ function parseCsv(text: string): { headers: string[]; rows: CsvRow[] } {
   return { headers, rows };
 }
 
+function mapCsvRowsToFaculty(rows: CsvRow[]): FacultyRecord[] {
+  return rows.map((row) => ({
+    email: row.email ?? "",
+    first_name: row.first_name ?? "",
+    last_name: row.last_name ?? "",
+    first_initial: row.first_initial ?? "",
+    primary_department: row.primary_department ?? "",
+    status: row.status ?? "",
+  }));
+}
+
 export default function RosterPage() {
   const [headers, setHeaders] = useState<string[]>([]);
   const [rows, setRows] = useState<CsvRow[]>([]);
-  const [error, setError] = useState<string>("");
+  const [storedRows, setStoredRows] = useState<FacultyRecord[]>([]);
   const [fileName, setFileName] = useState<string>("");
+  const [message, setMessage] = useState<Message | null>(null);
+  const [isSaving, setIsSaving] = useState<boolean>(false);
+  const [isLoadingStoredRows, setIsLoadingStoredRows] = useState<boolean>(true);
 
   const missingColumns = useMemo(
     () => REQUIRED_COLUMNS.filter((column) => !headers.includes(column)),
     [headers],
   );
+
+  const canSave = rows.length > 0 && missingColumns.length === 0 && !isSaving;
+
+  const loadStoredRows = async () => {
+    setIsLoadingStoredRows(true);
+    const { data, error } = await listFacultyRows();
+
+    if (error) {
+      setMessage({
+        kind: "error",
+        text: `Unable to load existing Supabase faculty rows. ${error}`,
+      });
+      setIsLoadingStoredRows(false);
+      return;
+    }
+
+    setStoredRows(data ?? []);
+    setIsLoadingStoredRows(false);
+  };
+
+  useEffect(() => {
+    void loadStoredRows();
+  }, []);
 
   const handleFileUpload = async (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
@@ -86,12 +122,12 @@ export default function RosterPage() {
     }
 
     setFileName(file.name);
-    setError("");
+    setMessage(null);
 
     if (!file.name.toLowerCase().endsWith(".csv")) {
       setHeaders([]);
       setRows([]);
-      setError("Please upload a CSV file (.csv).");
+      setMessage({ kind: "error", text: "Please upload a CSV file (.csv)." });
       return;
     }
 
@@ -102,19 +138,54 @@ export default function RosterPage() {
     setRows(parsed.rows);
 
     if (parsed.headers.length === 0) {
-      setError("The uploaded CSV appears empty. Please upload a file with header columns.");
+      setMessage({
+        kind: "error",
+        text: "The uploaded CSV appears empty. Please upload a file with header columns.",
+      });
       return;
     }
 
     const missing = REQUIRED_COLUMNS.filter((column) => !parsed.headers.includes(column));
     if (missing.length > 0) {
-      setError(
-        `Missing required columns: ${missing.join(", ")}. Please update your roster file and upload again.`,
-      );
+      setMessage({
+        kind: "error",
+        text: `Missing required columns: ${missing.join(", ")}. Please update your roster file and upload again.`,
+      });
+      return;
     }
 
-    // FUTURE: Store uploaded roster in Supabase and track upload metadata.
-    // FUTURE: Trigger downstream PubMed candidate generation from validated roster records.
+    setMessage({
+      kind: "success",
+      text: "CSV validation passed. You can now save these rows to Supabase.",
+    });
+  };
+
+  const handleSaveToSupabase = async () => {
+    if (!canSave) {
+      return;
+    }
+
+    setIsSaving(true);
+    setMessage(null);
+
+    const facultyRows = mapCsvRowsToFaculty(rows);
+    const { data, error } = await saveFacultyRows(facultyRows);
+
+    if (error) {
+      setMessage({ kind: "error", text: `Roster upload failed. ${error}` });
+      setIsSaving(false);
+      return;
+    }
+
+    setStoredRows(data ?? []);
+    setMessage({
+      kind: "success",
+      text: `Roster saved to Supabase (${facultyRows.length} rows submitted).`,
+    });
+    setIsSaving(false);
+
+    // FUTURE: This save flow should call a server endpoint/RPC that supports
+    // full replacement logic, diffs, and run-level metadata.
   };
 
   return (
@@ -122,8 +193,7 @@ export default function RosterPage() {
       <section className="card">
         <h1 className="text-2xl font-bold text-slate-900">Upload Faculty Roster</h1>
         <p className="mt-2 text-sm text-slate-600">
-          Upload a CSV with faculty profile fields. This table preview is local-only for now and
-          will later save to Supabase.
+          Upload a CSV, validate required columns, and save the working faculty roster to Supabase.
         </p>
 
         <div className="mt-4 rounded-lg border border-dashed border-slate-300 p-4">
@@ -149,28 +219,35 @@ export default function RosterPage() {
           </ul>
         </div>
 
-        {error ? (
-          <p className="mt-4 rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">
-            {error}
+        {message ? (
+          <p
+            className={`mt-4 rounded-md px-3 py-2 text-sm ${
+              message.kind === "error"
+                ? "border border-rose-200 bg-rose-50 text-rose-700"
+                : "border border-emerald-200 bg-emerald-50 text-emerald-700"
+            }`}
+          >
+            {message.text}
           </p>
         ) : null}
 
-        {!error && headers.length > 0 ? (
-          <p className="mt-4 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-700">
-            CSV looks valid. All required columns are present.
+        <div className="mt-4 flex items-center gap-3">
+          <button
+            type="button"
+            onClick={handleSaveToSupabase}
+            disabled={!canSave}
+            className="rounded-md bg-slate-900 px-4 py-2 text-sm font-medium text-white disabled:cursor-not-allowed disabled:bg-slate-300"
+          >
+            {isSaving ? "Saving..." : "Save roster to Supabase"}
+          </button>
+          <p className="text-xs text-slate-500">
+            This MVP currently refreshes the active faculty list using email-based upserts.
           </p>
-        ) : null}
-
-        {headers.length > 0 && missingColumns.length === 0 ? (
-          <p className="mt-2 text-xs text-slate-500">
-            Next phase will use <strong>last_name + first_initial</strong> with U-M affiliation
-            checks when querying PubMed.
-          </p>
-        ) : null}
+        </div>
       </section>
 
       <section className="card overflow-hidden">
-        <h2 className="text-lg font-semibold text-slate-900">Roster Preview</h2>
+        <h2 className="text-lg font-semibold text-slate-900">Uploaded CSV Preview</h2>
         {rows.length === 0 ? (
           <p className="mt-3 text-sm text-slate-600">No data loaded yet.</p>
         ) : (
@@ -199,6 +276,56 @@ export default function RosterPage() {
             </table>
             <p className="mt-2 text-xs text-slate-500">
               Showing {Math.min(rows.length, 25)} of {rows.length} rows.
+            </p>
+          </div>
+        )}
+      </section>
+
+      <section className="card overflow-hidden">
+        <div className="flex items-center justify-between gap-3">
+          <h2 className="text-lg font-semibold text-slate-900">Current Supabase Faculty Rows</h2>
+          <button
+            type="button"
+            onClick={() => {
+              void loadStoredRows();
+            }}
+            className="rounded-md border border-slate-300 px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50"
+          >
+            Refresh
+          </button>
+        </div>
+
+        {isLoadingStoredRows ? (
+          <p className="mt-3 text-sm text-slate-600">Loading rows from Supabase...</p>
+        ) : storedRows.length === 0 ? (
+          <p className="mt-3 text-sm text-slate-600">No faculty rows currently stored.</p>
+        ) : (
+          <div className="mt-4 overflow-x-auto">
+            <table className="min-w-full border-collapse text-sm">
+              <thead>
+                <tr className="border-b border-slate-200 bg-slate-100 text-left">
+                  {REQUIRED_COLUMNS.map((header) => (
+                    <th key={header} className="px-3 py-2 font-semibold text-slate-700">
+                      {header}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {storedRows.slice(0, 25).map((row) => (
+                  <tr key={row.email} className="border-b border-slate-100">
+                    <td className="px-3 py-2 text-slate-700">{row.email}</td>
+                    <td className="px-3 py-2 text-slate-700">{row.first_name}</td>
+                    <td className="px-3 py-2 text-slate-700">{row.last_name}</td>
+                    <td className="px-3 py-2 text-slate-700">{row.first_initial}</td>
+                    <td className="px-3 py-2 text-slate-700">{row.primary_department}</td>
+                    <td className="px-3 py-2 text-slate-700">{row.status}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            <p className="mt-2 text-xs text-slate-500">
+              Showing {Math.min(storedRows.length, 25)} of {storedRows.length} stored rows.
             </p>
           </div>
         )}
