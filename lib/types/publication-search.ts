@@ -8,6 +8,7 @@ export type PublicationSearchResult = {
   publication_date: string;
   PMID: string;
   international_flag: InternationalFlag;
+  international_countries: string;
   confidence: PublicationConfidence;
 };
 

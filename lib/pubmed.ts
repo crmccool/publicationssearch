@@ -164,6 +164,18 @@ function getCountryFromAffiliation(affiliation: string): string | null {
   return segment || null;
 }
 
+function isUSCountry(country: string): boolean {
+  const normalized = country.trim().toLowerCase();
+  return (
+    normalized === "usa" ||
+    normalized === "u.s.a." ||
+    normalized === "us" ||
+    normalized === "u.s." ||
+    normalized === "united states" ||
+    normalized === "united states of america"
+  );
+}
+
 function classifyInternational(affiliations: string[]): InternationalFlag {
   if (affiliations.length === 0) {
     return "unknown";
@@ -179,8 +191,7 @@ function classifyInternational(affiliations: string[]): InternationalFlag {
       continue;
     }
 
-    const normalized = country.toLowerCase();
-    if (normalized !== "usa" && normalized !== "united states") {
+    if (!isUSCountry(country)) {
       return "true";
     }
   }
@@ -190,6 +201,33 @@ function classifyInternational(affiliations: string[]): InternationalFlag {
   }
 
   return "false";
+}
+
+function extractInternationalCountries(
+  affiliations: string[],
+  internationalFlag: InternationalFlag,
+): string {
+  if (internationalFlag !== "true") {
+    return "";
+  }
+
+  const countries = new Set<string>();
+
+  for (const affiliation of affiliations) {
+    const country = getCountryFromAffiliation(affiliation);
+    if (!country || isUSCountry(country)) {
+      continue;
+    }
+
+    countries.add(country);
+  }
+
+  if (countries.size === 0) {
+    // FUTURE: Use richer affiliation parsing to identify country names that are not the trailing segment.
+    return "unknown";
+  }
+
+  return [...countries].join("; ");
 }
 
 function buildQueryTerm(faculty: FacultyRecord, startDate?: string, endDate?: string): string {
@@ -311,12 +349,18 @@ export async function searchFacultyPublications(
           continue;
         }
 
+        const internationalFlag = classifyInternational(publication.allAffiliations);
+
         results.push({
           faculty_name: `${faculty.first_name} ${faculty.last_name}`,
           title: publication.title,
           publication_date: publication.publicationDate,
           PMID: publication.pmid,
-          international_flag: classifyInternational(publication.allAffiliations),
+          international_flag: internationalFlag,
+          international_countries: extractInternationalCountries(
+            publication.allAffiliations,
+            internationalFlag,
+          ),
           confidence: matching.confidence,
         });
       }
