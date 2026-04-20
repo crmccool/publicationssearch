@@ -208,7 +208,7 @@ async function fetchPubMedIds(term: string): Promise<string[]> {
     db: "pubmed",
     term,
     retmode: "json",
-    retmax: "50",
+    retmax: "200",
   });
 
   const response = await fetch(
@@ -297,26 +297,34 @@ export async function searchFacultyPublications(
   endDate?: string,
 ): Promise<PublicationSearchResult[]> {
   const results: PublicationSearchResult[] = [];
+  const delayBetweenRequestsMs = 200;
 
   for (const faculty of facultyRows) {
-    const term = buildQueryTerm(faculty, startDate, endDate);
-    const ids = await fetchPubMedIds(term);
-    const publications = await fetchPubMedDetails(ids);
+    try {
+      const term = buildQueryTerm(faculty, startDate, endDate);
+      const ids = await fetchPubMedIds(term);
+      const publications = await fetchPubMedDetails(ids);
 
-    for (const publication of publications) {
-      const matching = matchPublicationToFaculty(publication, faculty);
-      if (!matching.include) {
-        continue;
+      for (const publication of publications) {
+        const matching = matchPublicationToFaculty(publication, faculty);
+        if (!matching.include) {
+          continue;
+        }
+
+        results.push({
+          faculty_name: `${faculty.first_name} ${faculty.last_name}`,
+          title: publication.title,
+          publication_date: publication.publicationDate,
+          PMID: publication.pmid,
+          international_flag: classifyInternational(publication.allAffiliations),
+          confidence: matching.confidence,
+        });
       }
-
-      results.push({
-        faculty_name: `${faculty.first_name} ${faculty.last_name}`,
-        title: publication.title,
-        publication_date: publication.publicationDate,
-        PMID: publication.pmid,
-        international_flag: classifyInternational(publication.allAffiliations),
-        confidence: matching.confidence,
-      });
+    } catch (error) {
+      const facultyName = `${faculty.first_name} ${faculty.last_name}`.trim();
+      console.error(`Publication search failed for faculty "${facultyName}".`, error);
+    } finally {
+      await new Promise((resolve) => setTimeout(resolve, delayBetweenRequestsMs));
     }
   }
 
