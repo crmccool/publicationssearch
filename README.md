@@ -19,7 +19,10 @@ A first MVP scaffold for an internal admin/review tool to identify publications 
   - Success/error messaging for load/save
   - Preview of uploaded rows
   - Live list of currently stored faculty rows from Supabase
-- Placeholder pages for Publication Search, Results, and Export
+- Publication Search page with date range inputs and Run Search action for ACTIVE faculty
+- PubMed matching backend with strict author + University of Michigan affiliation validation
+- Results page table with filters for international_flag and confidence
+- Placeholder Export page
 
 ## Required Faculty Roster Columns
 
@@ -64,5 +67,6 @@ Then open http://localhost:3000.
 
 ## Future Scope (Not Included Yet)
 
-- PubMed matching using `last_name + first_initial` and University of Michigan affiliation criteria.
-- Publication results persistence and export.
+- Persistent search run history and database-backed publication result storage.
+- ORCID enrichment and stronger country normalization for international detection.
+- Export workflows.
