@@ -17,4 +17,17 @@ export type PublicationSearchRequest = {
   endDate?: string;
 };
 
+export type PublicationSearchRunSummary = {
+  start_date: string | null;
+  end_date: string | null;
+  run_timestamp: string;
+  faculty_count_searched: number;
+  result_count: number;
+};
+
+export type PublicationSearchStoredPayload = {
+  run_summary: PublicationSearchRunSummary;
+  results: PublicationSearchResult[];
+};
+
 export const RESULTS_STORAGE_KEY = "publicationSearchResults";

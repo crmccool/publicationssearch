@@ -6,11 +6,14 @@ import {
   InternationalFlag,
   PublicationConfidence,
   PublicationSearchResult,
+  PublicationSearchRunSummary,
+  PublicationSearchStoredPayload,
   RESULTS_STORAGE_KEY,
 } from "@/lib/types/publication-search";
 
 export default function ResultsPage() {
   const [results, setResults] = useState<PublicationSearchResult[]>([]);
+  const [runSummary, setRunSummary] = useState<PublicationSearchRunSummary | null>(null);
   const [internationalFilter, setInternationalFilter] = useState<"all" | InternationalFlag>("all");
   const [confidenceFilter, setConfidenceFilter] = useState<"all" | PublicationConfidence>("all");
 
@@ -21,12 +24,33 @@ export default function ResultsPage() {
     }
 
     try {
-      const parsed = JSON.parse(raw) as PublicationSearchResult[];
-      setResults(parsed);
+      const parsed = JSON.parse(raw) as PublicationSearchStoredPayload | PublicationSearchResult[];
+      if (Array.isArray(parsed)) {
+        setResults(parsed);
+        setRunSummary(null);
+      } else {
+        setResults(parsed.results ?? []);
+        setRunSummary(parsed.run_summary ?? null);
+      }
     } catch {
       setResults([]);
+      setRunSummary(null);
     }
   }, []);
+
+  const formatDateRange = (date: string | null) => {
+    if (!date) {
+      return "Any date";
+    }
+
+    return new Date(`${date}T00:00:00`).toLocaleDateString();
+  };
+
+  const formatRunTimestamp = (timestamp: string) =>
+    new Date(timestamp).toLocaleString(undefined, {
+      dateStyle: "medium",
+      timeStyle: "short",
+    });
 
   const filteredResults = useMemo(
     () =>
@@ -48,6 +72,20 @@ export default function ResultsPage() {
         Review strict author-affiliation publication matches and filter by international status and
         match confidence.
       </p>
+      {runSummary ? (
+        <div className="mt-4 rounded-md border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-900">
+          <p className="font-semibold">Search run summary</p>
+          <ul className="mt-1 list-disc space-y-1 pl-5">
+            <li>
+              Date range: {formatDateRange(runSummary.start_date)} to{" "}
+              {formatDateRange(runSummary.end_date)}
+            </li>
+            <li>Run time: {formatRunTimestamp(runSummary.run_timestamp)}</li>
+            <li>Faculty searched: {runSummary.faculty_count_searched}</li>
+            <li>Total results: {runSummary.result_count}</li>
+          </ul>
+        </div>
+      ) : null}
 
       <div className="mt-5 grid gap-4 md:grid-cols-2">
         <label className="text-sm text-slate-700">

@@ -5,6 +5,8 @@ import { useRouter } from "next/navigation";
 
 import {
   PublicationSearchResult,
+  PublicationSearchRunSummary,
+  PublicationSearchStoredPayload,
   RESULTS_STORAGE_KEY,
 } from "@/lib/types/publication-search";
 
@@ -32,44 +34,67 @@ export default function SearchPage() {
     }
 
     setIsRunning(true);
-
-    const response = await fetch("/api/publication-search", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        startDate: startDate || undefined,
-        endDate: endDate || undefined,
-      }),
+    setMessage({
+      kind: "success",
+      text: "Running publication search. This may take a moment...",
     });
 
-    const payload = (await response.json()) as {
-      results?: PublicationSearchResult[];
-      result_count?: number;
-      faculty_count?: number;
-      error?: string;
-    };
+    try {
+      const response = await fetch("/api/publication-search", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          startDate: startDate || undefined,
+          endDate: endDate || undefined,
+        }),
+      });
 
-    if (!response.ok) {
+      const payload = (await response.json()) as {
+        start_date?: string | null;
+        end_date?: string | null;
+        run_timestamp?: string;
+        faculty_count_searched?: number;
+        result_count?: number;
+        results?: PublicationSearchResult[];
+        error?: string;
+      };
+
+      if (!response.ok) {
+        setMessage({
+          kind: "error",
+          text: payload.error ?? "Publication search failed.",
+        });
+        return;
+      }
+
+      const runSummary: PublicationSearchRunSummary = {
+        start_date: payload.start_date ?? null,
+        end_date: payload.end_date ?? null,
+        run_timestamp: payload.run_timestamp ?? new Date().toISOString(),
+        faculty_count_searched: payload.faculty_count_searched ?? 0,
+        result_count: payload.result_count ?? 0,
+      };
+
+      const storedPayload: PublicationSearchStoredPayload = {
+        run_summary: runSummary,
+        results: payload.results ?? [],
+      };
+
+      sessionStorage.setItem(RESULTS_STORAGE_KEY, JSON.stringify(storedPayload));
+
+      router.push("/results");
+    } catch (error) {
       setIsRunning(false);
       setMessage({
         kind: "error",
-        text: payload.error ?? "Publication search failed.",
+        text: error instanceof Error ? error.message : "Publication search failed.",
       });
       return;
+    } finally {
+      setIsRunning(false);
     }
-
-    const results = payload.results ?? [];
-    sessionStorage.setItem(RESULTS_STORAGE_KEY, JSON.stringify(results));
-
-    setMessage({
-      kind: "success",
-      text: `Search complete. ${payload.result_count ?? 0} matching publication(s) found across ${payload.faculty_count ?? 0} active faculty members.`,
-    });
-
-    setIsRunning(false);
-    router.push("/results");
   };
 
   return (
@@ -112,7 +137,7 @@ export default function SearchPage() {
         disabled={isRunning}
         className="mt-5 rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-slate-300"
       >
-        {isRunning ? "Running..." : "Run Search"}
+        {isRunning ? "Running Search..." : "Run Search"}
       </button>
 
       {message ? (

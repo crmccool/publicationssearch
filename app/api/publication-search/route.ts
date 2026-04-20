@@ -20,7 +20,10 @@ export async function POST(request: NextRequest) {
     const results = await searchFacultyPublications(activeFaculty, body.startDate, body.endDate);
 
     return NextResponse.json({
-      faculty_count: activeFaculty.length,
+      start_date: body.startDate ?? null,
+      end_date: body.endDate ?? null,
+      run_timestamp: new Date().toISOString(),
+      faculty_count_searched: activeFaculty.length,
       result_count: results.length,
       results,
     });
