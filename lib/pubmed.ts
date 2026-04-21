@@ -290,7 +290,7 @@ function parseAuthors(articleBlock: string): ParsedAuthor[] {
 
 function parsePubmedArticles(xml: string): ParsedPublication[] {
   const publications: ParsedPublication[] = [];
-  const articleRegex = /<PubmedArticle>([\s\S]*?)<\/PubmedArticle>/g;
+  const articleRegex = /<PubmedArticle(?:\s[^>]*)?>([\s\S]*?)<\/PubmedArticle>/g;
 
   let match = articleRegex.exec(xml);
   while (match) {
@@ -771,10 +771,20 @@ async function fetchPubMedDetailsBatch(
   }
 
   if (!trimmedBody) {
+    console.info(
+      `[pubmed-debug] efetch_parse_summary faculty="${facultyName}" requested_pmids="${pmids.join(",")}" raw_pubmed_article_count=0 parsed_publication_count=0 parsed_pmids="" forensic_target_present=false`,
+    );
     return [];
   }
 
   const publications = parsePubmedArticles(body);
+  const rawPubmedArticleCount = (body.match(/<PubmedArticle(?:\s[^>]*)?>/g) ?? []).length;
+  const parsedPmids = publications.map((publication) => publication.pmid);
+  const forensicTargetPresent = parsedPmids.includes(PUBMED_FORENSIC_TARGET_PMID);
+  console.info(
+    `[pubmed-debug] efetch_parse_summary faculty="${facultyName}" requested_pmids="${pmids.join(",")}" raw_pubmed_article_count=${rawPubmedArticleCount} parsed_publication_count=${publications.length} parsed_pmids="${parsedPmids.join(",")}" forensic_target_present=${forensicTargetPresent}`,
+  );
+
   if (publications.length === 0 && body.includes("<ERROR>")) {
     throw Object.assign(new Error(`PubMed details parsing failed: ${body.slice(0, 500)}`), {
       stage: "details_response_parsing" as PubMedSearchFailureStage,
@@ -843,6 +853,11 @@ async function fetchPubMedDetails(pmids: string[], facultyName: string): Promise
       continue;
     }
   }
+
+  const allParsedPmids = allPublications.map((publication) => publication.pmid);
+  console.info(
+    `[pubmed-debug] efetch_post_parse faculty="${facultyName}" requested_pmids="${sanitizedPmids.join(",")}" all_parsed_pmids="${allParsedPmids.join(",")}" forensic_target_present=${allParsedPmids.includes(PUBMED_FORENSIC_TARGET_PMID)}`,
+  );
 
   return allPublications;
 }
@@ -999,6 +1014,11 @@ export async function searchFacultyPublications(
 
         for (const publication of currentPublications) {
           pmidsProcessed += 1;
+          if (publication.pmid === PUBMED_FORENSIC_TARGET_PMID) {
+            console.info(
+              `[pubmed-debug] forensic_target_reached_evaluation faculty="${facultyName}" phase="${phase}" pmid="${publication.pmid}"`,
+            );
+          }
 
           if (!publication.pmid || !publication.publicationDate || publication.authors.length === 0) {
             console.info(
