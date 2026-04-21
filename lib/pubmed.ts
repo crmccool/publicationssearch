@@ -29,6 +29,14 @@ type PubMedIdSearchResult = {
 };
 
 const PUBMED_RETMAX = 200;
+const PUBMED_DEBUG_TARGET_FACULTY = (
+  process.env.PUBMED_DEBUG_FACULTY ?? "Cheryl Moyer"
+).toLowerCase();
+const PUBMED_DEBUG_DISABLE_DATE_FILTER = process.env.PUBMED_DEBUG_DISABLE_DATE_FILTER === "true";
+const PUBMED_DEBUG_DISABLE_AUTHOR_FILTER =
+  process.env.PUBMED_DEBUG_DISABLE_AUTHOR_FILTER === "true";
+const PUBMED_DEBUG_DISABLE_UM_AFFILIATION_FILTER =
+  process.env.PUBMED_DEBUG_DISABLE_UM_AFFILIATION_FILTER === "true";
 
 const US_STATE_TERMS = [
   "alabama",
@@ -304,24 +312,36 @@ function parseDateForRange(value: string): Date | null {
   return Number.isNaN(parsed.valueOf()) ? null : parsed;
 }
 
-function isWithinDateRange(publicationDate: string, startDate?: string, endDate?: string): boolean {
+function evaluateDateRange(
+  publicationDate: string,
+  startDate?: string,
+  endDate?: string,
+): { isWithinRange: boolean; parsedDate: Date | null } {
+  if (!startDate && !endDate) {
+    return {
+      // Date should not be a hard blocker if no date range is requested.
+      isWithinRange: true,
+      parsedDate: parseDateForRange(publicationDate),
+    };
+  }
+
   const publication = parseDateForRange(publicationDate);
   if (!publication) {
-    return false;
+    return { isWithinRange: false, parsedDate: null };
   }
 
   const start = startDate ? new Date(`${startDate}T00:00:00Z`) : null;
   const end = endDate ? new Date(`${endDate}T23:59:59Z`) : null;
 
   if (start && publication < start) {
-    return false;
+    return { isWithinRange: false, parsedDate: publication };
   }
 
   if (end && publication > end) {
-    return false;
+    return { isWithinRange: false, parsedDate: publication };
   }
 
-  return true;
+  return { isWithinRange: true, parsedDate: publication };
 }
 
 function isUMichAffiliation(affiliation: string): boolean {
@@ -607,16 +627,66 @@ export async function searchFacultyPublications(
       const { pmids } = idSearchResult;
       const publications = await fetchPubMedDetails(pmids);
       const facultyName = `${faculty.first_name} ${faculty.last_name}`.trim();
+      const isTargetFaculty = facultyName.toLowerCase() === PUBMED_DEBUG_TARGET_FACULTY;
+      const retrievedPmidsCount = pmids.length;
 
       console.info(
         `[pubmed-debug] faculty="${facultyName}" query='${idSearchResult.query}' total_pmids=${idSearchResult.totalCount} returned_pmids=${pmids.length} retmax=${idSearchResult.retmax} retmax_hit=${idSearchResult.retmaxHit} candidate_pmids=${pmids.join(",")}`,
       );
 
-      for (const publication of publications) {
-        const hasNameMatch = matchAuthorName(faculty, publication);
-        const hasUmAffiliation = hasUMichAffiliation(publication.allAffiliations);
-        const dateInRange = isWithinDateRange(publication.publicationDate, startDate, endDate);
+      const dateEvaluated = publications.map((publication) => {
+        const dateEvaluation = evaluateDateRange(publication.publicationDate, startDate, endDate);
+        const passesDate = PUBMED_DEBUG_DISABLE_DATE_FILTER ? true : dateEvaluation.isWithinRange;
 
+        if (!dateEvaluation.parsedDate) {
+          console.info(
+            `[pubmed-debug] date_parse_failed faculty="${facultyName}" pmid=${publication.pmid} raw_publication_date="${publication.publicationDate}"`,
+          );
+        }
+
+        if (isTargetFaculty) {
+          console.info(
+            `[pubmed-debug] faculty="${facultyName}" pmid=${publication.pmid} raw_publication_date="${publication.publicationDate}" parsed_date="${dateEvaluation.parsedDate ? dateEvaluation.parsedDate.toISOString() : "null"}" is_within_date_range=${dateEvaluation.isWithinRange}`,
+          );
+        }
+
+        return {
+          publication,
+          dateEvaluation,
+          passesDate,
+        };
+      });
+
+      const afterDateFilter = dateEvaluated.filter((item) => item.passesDate);
+      const afterAuthorFilter = afterDateFilter.filter((item) => {
+        if (PUBMED_DEBUG_DISABLE_AUTHOR_FILTER) {
+          return true;
+        }
+        return matchAuthorName(faculty, item.publication);
+      });
+      const afterUmAffiliationFilter = afterAuthorFilter.filter((item) => {
+        if (PUBMED_DEBUG_DISABLE_UM_AFFILIATION_FILTER) {
+          return true;
+        }
+        return hasUMichAffiliation(item.publication.allAffiliations);
+      });
+
+      console.info(
+        `[pubmed-debug] stage_counts faculty="${facultyName}" pmids_retrieved=${retrievedPmidsCount} parsed_publications=${publications.length} after_date_filter=${afterDateFilter.length} after_author_match=${afterAuthorFilter.length} after_umich_affiliation_filter=${afterUmAffiliationFilter.length} final_accepted_pre_dedupe=${afterUmAffiliationFilter.length} disable_date_filter=${PUBMED_DEBUG_DISABLE_DATE_FILTER} disable_author_filter=${PUBMED_DEBUG_DISABLE_AUTHOR_FILTER} disable_umich_filter=${PUBMED_DEBUG_DISABLE_UM_AFFILIATION_FILTER}`,
+      );
+
+      let finalAcceptedCount = 0;
+      for (const item of afterUmAffiliationFilter) {
+        const publication = item.publication;
+        const hasNameMatchRaw = matchAuthorName(faculty, publication);
+        const hasUmAffiliationRaw = hasUMichAffiliation(publication.allAffiliations);
+        const hasNameMatch = PUBMED_DEBUG_DISABLE_AUTHOR_FILTER ? true : hasNameMatchRaw;
+        const hasUmAffiliation = PUBMED_DEBUG_DISABLE_UM_AFFILIATION_FILTER
+          ? true
+          : hasUmAffiliationRaw;
+        const dateInRange = PUBMED_DEBUG_DISABLE_DATE_FILTER
+          ? true
+          : item.dateEvaluation.isWithinRange;
         const rejectionReasons: string[] = [];
         if (!dateInRange) {
           rejectionReasons.push("date_out_of_range_or_unparseable");
@@ -651,6 +721,7 @@ export async function searchFacultyPublications(
           continue;
         }
         seenFacultyPmid.add(dedupeKey);
+        finalAcceptedCount += 1;
 
         const classification = classifyPublicationAffiliations(publication.allAffiliations);
 
@@ -661,9 +732,13 @@ export async function searchFacultyPublications(
           PMID: publication.pmid,
           international_flag: classification.internationalFlag,
           international_countries: classification.internationalCountries,
-          confidence: getConfidence(faculty, publication, hasNameMatch),
+          confidence: getConfidence(faculty, publication, hasNameMatchRaw),
         });
       }
+
+      console.info(
+        `[pubmed-debug] final_count faculty="${facultyName}" final_accepted=${finalAcceptedCount}`,
+      );
     } catch (error) {
       const facultyName = `${faculty.first_name} ${faculty.last_name}`.trim();
       console.error(`Publication search failed for faculty "${facultyName}".`, error);
