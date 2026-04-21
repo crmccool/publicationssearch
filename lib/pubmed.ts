@@ -148,6 +148,15 @@ function parsePubmedArticles(xml: string): ParsedPublication[] {
   return publications;
 }
 
+function hasUMAffiliation(affiliations: string[]): boolean {
+  return affiliations.some((affiliation) => {
+    const normalized = affiliation.toLowerCase();
+    return (
+      normalized.includes("university of michigan") || normalized.includes("michigan medicine")
+    );
+  });
+}
+
 function getCountryFromAffiliation(affiliation: string): string | null {
   const compact = affiliation.replace(/\s+/g, " ").trim();
   if (!compact) {
@@ -313,18 +322,13 @@ function matchPublicationToFaculty(
     return { include: false, confidence: "low" };
   }
 
-  const matchedWithUM = candidateIndices.filter((index) =>
-    publication.authors[index].affiliations.some((affiliation) =>
-      affiliation.toLowerCase().includes("university of michigan"),
-    ),
-  );
-
-  if (matchedWithUM.length === 0) {
+  // PubMed does not reliably link affiliations to specific authors,
+  // so University of Michigan validation is performed at the paper level.
+  if (!hasUMAffiliation(publication.allAffiliations)) {
     return { include: false, confidence: "low" };
   }
 
-  const confidence: PublicationConfidence =
-    candidateIndices.length === 1 && matchedWithUM.length === 1 ? "high" : "low";
+  const confidence: PublicationConfidence = candidateIndices.length === 1 ? "high" : "low";
 
   return { include: true, confidence };
 }
