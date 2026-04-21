@@ -5,23 +5,123 @@ import {
   PublicationSearchResult,
 } from "@/lib/types/publication-search";
 
-type ParsedAuthor = {
-  lastName: string;
-  firstInitial: string;
-  affiliations: string[];
-};
-
 type ParsedPublication = {
   pmid: string;
   title: string;
   publicationDate: string;
-  authors: ParsedAuthor[];
   allAffiliations: string[];
 };
 
-function escapeTerm(value: string): string {
-  return value.replace(/\"/g, " ").trim();
-}
+type OrcidWorkIdentifier = {
+  doi?: string;
+  pmid?: string;
+};
+
+const US_STATE_TERMS = [
+  "alabama",
+  "alaska",
+  "arizona",
+  "arkansas",
+  "california",
+  "colorado",
+  "connecticut",
+  "delaware",
+  "florida",
+  "georgia",
+  "hawaii",
+  "idaho",
+  "illinois",
+  "indiana",
+  "iowa",
+  "kansas",
+  "kentucky",
+  "louisiana",
+  "maine",
+  "maryland",
+  "massachusetts",
+  "michigan",
+  "minnesota",
+  "mississippi",
+  "missouri",
+  "montana",
+  "nebraska",
+  "nevada",
+  "new hampshire",
+  "new jersey",
+  "new mexico",
+  "new york",
+  "north carolina",
+  "north dakota",
+  "ohio",
+  "oklahoma",
+  "oregon",
+  "pennsylvania",
+  "rhode island",
+  "south carolina",
+  "south dakota",
+  "tennessee",
+  "texas",
+  "utah",
+  "vermont",
+  "virginia",
+  "washington",
+  "west virginia",
+  "wisconsin",
+  "wyoming",
+  "dc",
+  "d.c.",
+  "district of columbia",
+  "al",
+  "ak",
+  "az",
+  "ar",
+  "ca",
+  "co",
+  "ct",
+  "de",
+  "fl",
+  "ga",
+  "hi",
+  "id",
+  "il",
+  "in",
+  "ia",
+  "ks",
+  "ky",
+  "la",
+  "me",
+  "md",
+  "ma",
+  "mi",
+  "mn",
+  "ms",
+  "mo",
+  "mt",
+  "ne",
+  "nv",
+  "nh",
+  "nj",
+  "nm",
+  "ny",
+  "nc",
+  "nd",
+  "oh",
+  "ok",
+  "or",
+  "pa",
+  "ri",
+  "sc",
+  "sd",
+  "tn",
+  "tx",
+  "ut",
+  "vt",
+  "va",
+  "wa",
+  "wv",
+  "wi",
+  "wy",
+];
 
 function decodeXmlEntities(value: string): string {
   return value
@@ -85,39 +185,6 @@ function parsePublicationDate(articleBlock: string): string {
   return medlineDate || "Unknown";
 }
 
-function parseArticleAuthors(articleBlock: string): ParsedAuthor[] {
-  const authors: ParsedAuthor[] = [];
-  const authorRegex = /<Author(?: [^>]*)?>([\s\S]*?)<\/Author>/g;
-
-  let match = authorRegex.exec(articleBlock);
-  while (match) {
-    const authorBlock = match[1];
-    const lastName = getTagValue(authorBlock, "LastName");
-    const initials = getTagValue(authorBlock, "Initials");
-    const firstName = getTagValue(authorBlock, "ForeName");
-
-    const firstInitial = initials
-      ? initials[0]
-      : firstName
-        ? firstName[0]
-        : "";
-
-    const affiliations = getAllTagValues(authorBlock, "Affiliation");
-
-    if (lastName && firstInitial) {
-      authors.push({
-        lastName: lastName.toLowerCase(),
-        firstInitial: firstInitial.toLowerCase(),
-        affiliations,
-      });
-    }
-
-    match = authorRegex.exec(articleBlock);
-  }
-
-  return authors;
-}
-
 function parsePubmedArticles(xml: string): ParsedPublication[] {
   const publications: ParsedPublication[] = [];
   const articleRegex = /<PubmedArticle>([\s\S]*?)<\/PubmedArticle>/g;
@@ -129,7 +196,6 @@ function parsePubmedArticles(xml: string): ParsedPublication[] {
     const pmid = getTagValue(articleBlock, "PMID");
     const title = getTagValue(articleBlock, "ArticleTitle");
     const publicationDate = parsePublicationDate(articleBlock);
-    const authors = parseArticleAuthors(articleBlock);
     const allAffiliations = getAllTagValues(articleBlock, "Affiliation");
 
     if (pmid && title) {
@@ -137,7 +203,6 @@ function parsePubmedArticles(xml: string): ParsedPublication[] {
         pmid,
         title,
         publicationDate,
-        authors,
         allAffiliations,
       });
     }
@@ -148,115 +213,71 @@ function parsePubmedArticles(xml: string): ParsedPublication[] {
   return publications;
 }
 
-function hasUMAffiliation(affiliations: string[]): boolean {
-  return affiliations.some((affiliation) => {
-    const normalized = affiliation.toLowerCase();
-    return (
-      normalized.includes("university of michigan") || normalized.includes("michigan medicine")
-    );
+function normalizeDoi(value: string): string {
+  return value.replace(/^https?:\/\/doi\.org\//i, "").trim();
+}
+
+async function fetchOrcidWorks(orcid: string): Promise<OrcidWorkIdentifier[]> {
+  const response = await fetch(`https://pub.orcid.org/v3.0/${orcid}/works`, {
+    cache: "no-store",
+    headers: {
+      Accept: "application/json",
+    },
   });
-}
 
-function getCountryFromAffiliation(affiliation: string): string | null {
-  const compact = affiliation.replace(/\s+/g, " ").trim();
-  if (!compact) {
-    return null;
+  if (!response.ok) {
+    throw new Error(`ORCID works request failed for ${orcid}.`);
   }
 
-  const segment = compact
-    .replace(/[.;]\s*$/, "")
-    .split(",")
-    .map((part) => part.trim())
-    .filter(Boolean)
-    .at(-1);
+  const data = (await response.json()) as {
+    group?: Array<{
+      "external-ids"?: {
+        "external-id"?: Array<{
+          "external-id-type"?: string;
+          "external-id-value"?: string;
+        }>;
+      };
+    }>;
+  };
 
-  return segment || null;
-}
+  const identifiers: OrcidWorkIdentifier[] = [];
 
-function isUSCountry(country: string): boolean {
-  const normalized = country.trim().toLowerCase();
-  return (
-    normalized === "usa" ||
-    normalized === "u.s.a." ||
-    normalized === "us" ||
-    normalized === "u.s." ||
-    normalized === "united states" ||
-    normalized === "united states of america"
-  );
-}
+  for (const group of data.group ?? []) {
+    const externalIds = group["external-ids"]?.["external-id"] ?? [];
+    let pmid: string | undefined;
+    let doi: string | undefined;
 
-function classifyInternational(affiliations: string[]): InternationalFlag {
-  if (affiliations.length === 0) {
-    return "unknown";
-  }
+    for (const externalId of externalIds) {
+      const type = (externalId["external-id-type"] ?? "").toLowerCase();
+      const value = (externalId["external-id-value"] ?? "").trim();
 
-  let hasUnknownCountry = false;
+      if (!value) {
+        continue;
+      }
 
-  for (const affiliation of affiliations) {
-    const country = getCountryFromAffiliation(affiliation);
+      if (type === "pmid") {
+        pmid = value;
+      }
 
-    if (!country) {
-      hasUnknownCountry = true;
-      continue;
+      if (type === "doi") {
+        doi = normalizeDoi(value);
+      }
     }
 
-    if (!isUSCountry(country)) {
-      return "true";
+    if (pmid || doi) {
+      identifiers.push({ pmid, doi });
     }
   }
 
-  if (hasUnknownCountry) {
-    return "unknown";
-  }
-
-  return "false";
+  return identifiers;
 }
 
-function extractInternationalCountries(
-  affiliations: string[],
-  internationalFlag: InternationalFlag,
-): string {
-  if (internationalFlag !== "true") {
-    return "";
-  }
-
-  const countries = new Set<string>();
-
-  for (const affiliation of affiliations) {
-    const country = getCountryFromAffiliation(affiliation);
-    if (!country || isUSCountry(country)) {
-      continue;
-    }
-
-    countries.add(country);
-  }
-
-  if (countries.size === 0) {
-    // FUTURE: Use richer affiliation parsing to identify country names that are not the trailing segment.
-    return "unknown";
-  }
-
-  return [...countries].join("; ");
-}
-
-function buildQueryTerm(faculty: FacultyRecord, startDate?: string, endDate?: string): string {
-  const authorTerm = `${escapeTerm(faculty.last_name)} ${escapeTerm(faculty.first_initial)}[Author]`;
-
-  const dateRangeStart = startDate || "1900/01/01";
-  const dateRangeEnd = endDate || "3000/12/31";
-  const dateTerm = `("${dateRangeStart}"[Date - Publication] : "${dateRangeEnd}"[Date - Publication])`;
-
-  // Intentionally keep the PubMed query broad and apply University of Michigan affiliation
-  // filtering in code so valid results are not missed because of PubMed ranking and retmax limits.
-  return `${authorTerm} AND ${dateTerm}`;
-}
-
-async function fetchPubMedIds(term: string): Promise<string[]> {
+async function fetchPubMedIdsByDoi(doi: string): Promise<string[]> {
   const params = new URLSearchParams({
     db: "pubmed",
-    term,
+    term: `${doi}[DOI]`,
     retmode: "json",
-    retmax: "200",
+    retmax: "20",
   });
 
   const response = await fetch(
@@ -267,7 +288,7 @@ async function fetchPubMedIds(term: string): Promise<string[]> {
   );
 
   if (!response.ok) {
-    throw new Error("PubMed search request failed.");
+    throw new Error(`PubMed DOI lookup failed for DOI ${doi}.`);
   }
 
   const data = (await response.json()) as {
@@ -305,33 +326,194 @@ async function fetchPubMedDetails(pmids: string[]): Promise<ParsedPublication[]>
   return parsePubmedArticles(xml);
 }
 
-function matchPublicationToFaculty(
-  publication: ParsedPublication,
-  faculty: FacultyRecord,
-): { include: boolean; confidence: PublicationConfidence } {
-  const targetLastName = faculty.last_name.trim().toLowerCase();
-  const targetFirstInitial = faculty.first_initial.trim().toLowerCase()[0] ?? "";
+function parseDateForRange(value: string): Date | null {
+  const trimmed = value.trim();
+  if (!trimmed || trimmed.toLowerCase() === "unknown") {
+    return null;
+  }
 
-  const candidateIndices: number[] = [];
-  publication.authors.forEach((author, index) => {
-    if (author.lastName === targetLastName && author.firstInitial === targetFirstInitial) {
-      candidateIndices.push(index);
+  const monthMap: Record<string, string> = {
+    jan: "01",
+    feb: "02",
+    mar: "03",
+    apr: "04",
+    may: "05",
+    jun: "06",
+    jul: "07",
+    aug: "08",
+    sep: "09",
+    oct: "10",
+    nov: "11",
+    dec: "12",
+  };
+
+  const parts = trimmed.split("-");
+  const year = parts[0];
+  if (!/^\d{4}$/.test(year)) {
+    return null;
+  }
+
+  let month = "01";
+  if (parts.length > 1) {
+    const rawMonth = parts[1].toLowerCase();
+    if (/^\d{1,2}$/.test(rawMonth)) {
+      month = rawMonth.padStart(2, "0");
+    } else {
+      month = monthMap[rawMonth.slice(0, 3)] ?? "01";
     }
+  }
+
+  let day = "01";
+  if (parts.length > 2 && /^\d{1,2}$/.test(parts[2])) {
+    day = parts[2].padStart(2, "0");
+  }
+
+  const parsed = new Date(`${year}-${month}-${day}T00:00:00Z`);
+  return Number.isNaN(parsed.valueOf()) ? null : parsed;
+}
+
+function isWithinDateRange(publicationDate: string, startDate?: string, endDate?: string): boolean {
+  const publication = parseDateForRange(publicationDate);
+  if (!publication) {
+    return false;
+  }
+
+  const start = startDate ? new Date(`${startDate}T00:00:00Z`) : null;
+  const end = endDate ? new Date(`${endDate}T23:59:59Z`) : null;
+
+  if (start && publication < start) {
+    return false;
+  }
+
+  if (end && publication > end) {
+    return false;
+  }
+
+  return true;
+}
+
+function isUMichAffiliation(affiliation: string): boolean {
+  const normalized = affiliation.toLowerCase();
+  return (
+    normalized.includes("university of michigan") ||
+    normalized.includes("michigan medicine") ||
+    normalized.includes("ann arbor")
+  );
+}
+
+function isDomesticAffiliation(affiliation: string): boolean {
+  const normalized = affiliation.toLowerCase();
+
+  if (normalized.includes("united states") || normalized.includes("usa") || normalized.includes("u.s.a")) {
+    return true;
+  }
+
+  return US_STATE_TERMS.some((stateTerm) => {
+    const escapedStateTerm = stateTerm.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const exactRegex = new RegExp(`(^|[^a-z])${escapedStateTerm}([^a-z]|$)`, "i");
+    return exactRegex.test(normalized);
   });
+}
 
-  if (candidateIndices.length === 0) {
-    return { include: false, confidence: "low" };
+function getCountryFromAffiliation(affiliation: string): string | null {
+  const compact = affiliation.replace(/\s+/g, " ").trim();
+  if (!compact) {
+    return null;
   }
 
-  // PubMed does not reliably link affiliations to specific authors,
-  // so University of Michigan validation is performed at the paper level.
-  if (!hasUMAffiliation(publication.allAffiliations)) {
-    return { include: false, confidence: "low" };
+  return (
+    compact
+      .replace(/[.;]\s*$/, "")
+      .split(",")
+      .map((part) => part.trim())
+      .filter(Boolean)
+      .at(-1) ?? null
+  );
+}
+
+function classifyPublicationAffiliations(affiliations: string[]): {
+  internationalFlag: InternationalFlag;
+  internationalCountries: string;
+} {
+  if (affiliations.length === 0) {
+    return {
+      internationalFlag: "unknown",
+      internationalCountries: "",
+    };
   }
 
-  const confidence: PublicationConfidence = candidateIndices.length === 1 ? "high" : "low";
+  const internationalCountries = new Set<string>();
+  let hasInternational = false;
+  let hasUnknownInternational = false;
 
-  return { include: true, confidence };
+  // Evaluate at publication level, not per-author, because PubMed affiliation-to-author
+  // linkage can be incomplete/inconsistent for many records.
+  for (const affiliation of affiliations) {
+    if (isUMichAffiliation(affiliation)) {
+      continue;
+    }
+
+    if (isDomesticAffiliation(affiliation)) {
+      continue;
+    }
+
+    hasInternational = true;
+    const country = getCountryFromAffiliation(affiliation);
+    if (!country || isDomesticAffiliation(country)) {
+      hasUnknownInternational = true;
+      continue;
+    }
+
+    internationalCountries.add(country);
+  }
+
+  if (!hasInternational) {
+    return {
+      internationalFlag: "false",
+      internationalCountries: "",
+    };
+  }
+
+  if (internationalCountries.size === 0) {
+    return {
+      internationalFlag: "true",
+      internationalCountries: "unknown",
+    };
+  }
+
+  if (hasUnknownInternational) {
+    internationalCountries.add("unknown");
+  }
+
+  return {
+    internationalFlag: "true",
+    internationalCountries: [...internationalCountries].join("; "),
+  };
+}
+
+async function resolvePmidsFromOrcid(orcid: string): Promise<string[]> {
+  const identifiers = await fetchOrcidWorks(orcid);
+  const pmids = new Set<string>();
+
+  // ORCID works do not always include PMIDs; DOI-to-PMID resolution fills part of that gap,
+  // but some DOI records are not indexed in PubMed and will remain unresolved.
+  for (const identifier of identifiers) {
+    if (identifier.pmid) {
+      pmids.add(identifier.pmid);
+      continue;
+    }
+
+    if (!identifier.doi) {
+      continue;
+    }
+
+    const resolvedPmids = await fetchPubMedIdsByDoi(identifier.doi);
+    for (const pmid of resolvedPmids) {
+      pmids.add(pmid);
+    }
+  }
+
+  return [...pmids];
 }
 
 export async function searchFacultyPublications(
@@ -343,30 +525,29 @@ export async function searchFacultyPublications(
   const delayBetweenRequestsMs = 200;
 
   for (const faculty of facultyRows) {
+    if (!faculty.orcid) {
+      continue;
+    }
+
     try {
-      const term = buildQueryTerm(faculty, startDate, endDate);
-      const ids = await fetchPubMedIds(term);
-      const publications = await fetchPubMedDetails(ids);
+      const pmids = await resolvePmidsFromOrcid(faculty.orcid);
+      const publications = await fetchPubMedDetails(pmids);
 
       for (const publication of publications) {
-        const matching = matchPublicationToFaculty(publication, faculty);
-        if (!matching.include) {
+        if (!isWithinDateRange(publication.publicationDate, startDate, endDate)) {
           continue;
         }
 
-        const internationalFlag = classifyInternational(publication.allAffiliations);
+        const classification = classifyPublicationAffiliations(publication.allAffiliations);
 
         results.push({
           faculty_name: `${faculty.first_name} ${faculty.last_name}`,
           title: publication.title,
           publication_date: publication.publicationDate,
           PMID: publication.pmid,
-          international_flag: internationalFlag,
-          international_countries: extractInternationalCountries(
-            publication.allAffiliations,
-            internationalFlag,
-          ),
-          confidence: matching.confidence,
+          international_flag: classification.internationalFlag,
+          international_countries: classification.internationalCountries,
+          confidence: "high" as PublicationConfidence,
         });
       }
     } catch (error) {
@@ -377,7 +558,5 @@ export async function searchFacultyPublications(
     }
   }
 
-  // FUTURE: Add ORCID-based disambiguation to improve author identity matching.
-  // FUTURE: Replace this country parsing heuristic with a dedicated geocoding/normalization service.
   return results;
 }

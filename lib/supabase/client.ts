@@ -54,7 +54,7 @@ async function runSupabaseRequest<T>(
 
 export async function listFacultyRows(): Promise<SupabaseResult<FacultyRecord[]>> {
   return runSupabaseRequest<FacultyRecord[]>(
-    `${FACULTY_TABLE}?select=email,first_name,last_name,first_initial,primary_department,status&order=last_name.asc,first_name.asc`,
+    `${FACULTY_TABLE}?select=email,first_name,last_name,first_initial,primary_department,status,orcid&order=last_name.asc,first_name.asc`,
     { method: "GET" },
   );
 }

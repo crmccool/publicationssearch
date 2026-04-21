@@ -69,8 +69,7 @@ export default function ResultsPage() {
     <section className="card">
       <h1 className="text-2xl font-bold text-slate-900">Results</h1>
       <p className="mt-2 text-sm text-slate-600">
-        Review strict author-affiliation publication matches and filter by international status and
-        match confidence.
+        Review ORCID-driven publication matches and filter by international status and confidence.
       </p>
       {runSummary ? (
         <div className="mt-4 rounded-md border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-900">
@@ -83,6 +82,7 @@ export default function ResultsPage() {
             <li>Run time: {formatRunTimestamp(runSummary.run_timestamp)}</li>
             <li>Faculty searched: {runSummary.faculty_count_searched}</li>
             <li>Total results: {runSummary.result_count}</li>
+            <li>Search method: {runSummary.search_method}</li>
           </ul>
         </div>
       ) : null}

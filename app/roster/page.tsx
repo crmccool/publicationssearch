@@ -3,7 +3,7 @@
 import { ChangeEvent, useEffect, useMemo, useState } from "react";
 
 import { listFacultyRows, saveFacultyRows } from "@/lib/supabase/client";
-import { FacultyRecord, REQUIRED_COLUMNS } from "@/lib/types/faculty";
+import { FacultyRecord, normalizeOrcid, REQUIRED_COLUMNS } from "@/lib/types/faculty";
 
 type CsvRow = Record<string, string>;
 
@@ -74,6 +74,7 @@ function mapCsvRowsToFaculty(rows: CsvRow[]): FacultyRecord[] {
     first_initial: row.first_initial ?? "",
     primary_department: row.primary_department ?? "",
     status: row.status ?? "",
+    orcid: normalizeOrcid(row.orcid),
   }));
 }
 
@@ -217,6 +218,10 @@ export default function RosterPage() {
               <li key={column}>• {column}</li>
             ))}
           </ul>
+          <p className="mt-2 text-xs text-slate-500">
+            Optional column: <code>orcid</code> (accepts bare ID or{" "}
+            <code>https://orcid.org/&lt;id&gt;</code>).
+          </p>
         </div>
 
         {message ? (
