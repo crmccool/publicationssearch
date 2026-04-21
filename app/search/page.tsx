@@ -51,6 +51,24 @@ export default function SearchPage() {
         }),
       });
 
+      if (!response.ok) {
+        const rawError = await response.text();
+        let errorMessage = "Publication search failed.";
+        if (rawError) {
+          try {
+            const parsed = JSON.parse(rawError) as { error?: string };
+            errorMessage = parsed.error ?? errorMessage;
+          } catch {
+            errorMessage = rawError.slice(0, 200);
+          }
+        }
+        setMessage({
+          kind: "error",
+          text: errorMessage,
+        });
+        return;
+      }
+
       const payload = (await response.json()) as {
         start_date?: string | null;
         end_date?: string | null;
@@ -59,16 +77,7 @@ export default function SearchPage() {
         result_count?: number;
         search_method?: "hybrid_pubmed_orcid";
         results?: PublicationSearchResult[];
-        error?: string;
       };
-
-      if (!response.ok) {
-        setMessage({
-          kind: "error",
-          text: payload.error ?? "Publication search failed.",
-        });
-        return;
-      }
 
       const runSummary: PublicationSearchRunSummary = {
         start_date: payload.start_date ?? null,
