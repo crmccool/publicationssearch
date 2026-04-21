@@ -32,6 +32,11 @@ const PUBMED_RETMAX = 200;
 const PUBMED_DEBUG_TARGET_FACULTY = (
   process.env.PUBMED_DEBUG_FACULTY ?? "Cheryl Moyer"
 ).toLowerCase();
+const PUBMED_QUERY_COMPARE_FACULTY = new Set([
+  "josh ehrlich",
+  "akbar waljee",
+  "cheryl moyer",
+]);
 const PUBMED_DEBUG_DISABLE_DATE_FILTER = process.env.PUBMED_DEBUG_DISABLE_DATE_FILTER === "true";
 const PUBMED_DEBUG_DISABLE_AUTHOR_FILTER =
   process.env.PUBMED_DEBUG_DISABLE_AUTHOR_FILTER === "true";
@@ -505,27 +510,33 @@ function normalizeAlphaText(value: string): string {
   return value.toLowerCase().replace(/[^a-z]/g, "");
 }
 
+function escapePubMedQuotedValue(value: string): string {
+  return value.replace(/"/g, "").replace(/\s+/g, " ").trim();
+}
+
 function buildPubMedAuthorQuery(faculty: FacultyRecord, startDate?: string, endDate?: string): string {
+  // Keep the PubMed query intentionally broad/minimal and apply filtering in code.
+  // Avoid date and compound OR clauses to reduce malformed-query edge cases.
   const trimmedFirst = faculty.first_name.trim();
   const firstToken = trimmedFirst.split(/\s+/)[0] ?? "";
-  const firstInitial = (faculty.first_initial || firstToken.charAt(0)).trim();
-  const last = faculty.last_name.trim();
+  const firstInitial = escapePubMedQuotedValue(faculty.first_initial || firstToken.charAt(0));
+  const last = escapePubMedQuotedValue(faculty.last_name);
 
-  const authorClauses = [`"${last} ${firstInitial}"[Author]`];
-  if (firstToken) {
-    authorClauses.push(`"${last} ${firstToken}"[Author]`);
+  void startDate;
+  void endDate;
+
+  if (!last || !firstInitial) {
+    throw new Error(
+      `PubMed author search requires non-empty last name and first initial (received last="${last}", firstInitial="${firstInitial}").`,
+    );
   }
-  const authorClause = `(${authorClauses.join(" OR ")})`;
 
-  if (!startDate && !endDate) {
-    return authorClause;
-  }
+  return `"${last} ${firstInitial}"[Author]`;
+}
 
-  const start = startDate ?? "1900/01/01";
-  const end = endDate ?? "3000/12/31";
-  const dateClause = `("${start}"[Date - Publication] : "${end}"[Date - Publication])`;
-
-  return `${authorClause} AND ${dateClause}`;
+function buildPubMedEsearchUrl(query: string): string {
+  const encodedTerm = encodeURIComponent(query);
+  return `https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi?db=pubmed&term=${encodedTerm}&retmode=json&retmax=${PUBMED_RETMAX}`;
 }
 
 async function fetchPubMedIdsForFaculty(
@@ -534,22 +545,22 @@ async function fetchPubMedIdsForFaculty(
   endDate?: string,
 ): Promise<PubMedIdSearchResult> {
   const query = buildPubMedAuthorQuery(faculty, startDate, endDate);
-  const params = new URLSearchParams({
-    db: "pubmed",
-    term: query,
-    retmode: "json",
-    retmax: PUBMED_RETMAX.toString(),
-  });
+  const url = buildPubMedEsearchUrl(query);
+  const facultyName = `${faculty.first_name} ${faculty.last_name}`.trim();
 
-  const response = await fetch(
-    `https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi?${params.toString()}`,
-    {
-      cache: "no-store",
-    },
+  console.info(
+    `[pubmed-debug] request faculty="${facultyName}" raw_query='${query}' encoded_url='${url}'`,
   );
 
+  const response = await fetch(url, {
+    cache: "no-store",
+  });
+
   if (!response.ok) {
-    throw new Error(`PubMed author search failed for ${faculty.last_name}.`);
+    const errorBody = await response.text();
+    throw new Error(
+      `PubMed author search failed for ${faculty.last_name} (status=${response.status}): ${errorBody.slice(0, 300)}`,
+    );
   }
 
   const data = (await response.json()) as {
@@ -665,6 +676,12 @@ export async function searchFacultyPublications(
       const facultyName = `${faculty.first_name} ${faculty.last_name}`.trim();
       const isTargetFaculty = facultyName.toLowerCase() === PUBMED_DEBUG_TARGET_FACULTY;
       const retrievedPmidsCount = pmids.length;
+
+      if (PUBMED_QUERY_COMPARE_FACULTY.has(facultyName.toLowerCase())) {
+        console.info(
+          `[pubmed-debug] compare_case faculty="${facultyName}" query='${idSearchResult.query}'`,
+        );
+      }
 
       console.info(
         `[pubmed-debug] faculty="${facultyName}" query='${idSearchResult.query}' total_pmids=${idSearchResult.totalCount} returned_pmids=${pmids.length} retmax=${idSearchResult.retmax} retmax_hit=${idSearchResult.retmaxHit} candidate_pmids=${pmids.join(",")}`,
