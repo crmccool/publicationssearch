@@ -59,6 +59,14 @@ const PUBMED_DEBUG_DISABLE_AUTHOR_FILTER =
   process.env.PUBMED_DEBUG_DISABLE_AUTHOR_FILTER === "true";
 const PUBMED_DEBUG_DISABLE_UM_AFFILIATION_FILTER =
   process.env.PUBMED_DEBUG_DISABLE_UM_AFFILIATION_FILTER === "true";
+const PUBMED_MIN_REQUEST_INTERVAL_MS = 1200;
+const PUBMED_429_MAX_RETRIES = 2;
+const PUBMED_429_BASE_BACKOFF_MS = 2500;
+
+type PubMedRequestType = "esearch" | "efetch";
+
+let pubMedRequestQueue: Promise<void> = Promise.resolve();
+let lastPubMedRequestStartedAt = 0;
 
 const US_STATE_TERMS = [
   "alabama",
@@ -558,6 +566,66 @@ function buildPubMedEsearchUrl(query: string): string {
   return `https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi?db=pubmed&term=${encodedTerm}&retmode=json&retmax=${PUBMED_RETMAX}`;
 }
 
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function runPubMedRequestWithThrottleAndRetry(
+  requestType: PubMedRequestType,
+  url: string,
+  facultyName: string,
+  pmid?: string,
+): Promise<Response> {
+  const runRequest = async (): Promise<Response> => {
+    const now = Date.now();
+    const waitForThrottleMs = Math.max(0, PUBMED_MIN_REQUEST_INTERVAL_MS - (now - lastPubMedRequestStartedAt));
+    if (waitForThrottleMs > 0) {
+      console.info(
+        `[pubmed-debug] request_wait request_type="${requestType}" faculty="${facultyName}" pmid="${pmid ?? "n/a"}" retry_count=0 wait_ms=${waitForThrottleMs} reason="throttle"`,
+      );
+      await sleep(waitForThrottleMs);
+    }
+
+    let attempt = 0;
+    while (attempt <= PUBMED_429_MAX_RETRIES) {
+      const retryCount = attempt;
+      lastPubMedRequestStartedAt = Date.now();
+
+      const response = await fetch(url, { cache: "no-store" });
+      if (response.status !== 429) {
+        console.info(
+          `[pubmed-debug] request_result request_type="${requestType}" faculty="${facultyName}" pmid="${pmid ?? "n/a"}" retry_count=${retryCount} wait_ms=${waitForThrottleMs} final_status="${response.ok ? "success" : "failure"}" http_status=${response.status}`,
+        );
+        return response;
+      }
+
+      if (attempt === PUBMED_429_MAX_RETRIES) {
+        console.error(
+          `[pubmed-error] request_result request_type="${requestType}" faculty="${facultyName}" pmid="${pmid ?? "n/a"}" retry_count=${retryCount} wait_ms=${waitForThrottleMs} final_status="failure" http_status=429`,
+        );
+        return response;
+      }
+
+      const retryWaitMs = PUBMED_429_BASE_BACKOFF_MS * 2 ** attempt;
+      console.warn(
+        `[pubmed-debug] request_retry request_type="${requestType}" faculty="${facultyName}" pmid="${pmid ?? "n/a"}" retry_count=${retryCount + 1} wait_ms=${retryWaitMs} reason="http_429"`,
+      );
+      await sleep(retryWaitMs);
+      attempt += 1;
+    }
+
+    throw new Error("PubMed request retry loop exited unexpectedly.");
+  };
+
+  const scheduledRequest = pubMedRequestQueue.then(runRequest, runRequest);
+  pubMedRequestQueue = scheduledRequest.then(
+    () => undefined,
+    () => undefined,
+  );
+
+  return scheduledRequest;
+}
+
 async function fetchPubMedIdsForFaculty(
   faculty: FacultyRecord,
   startDate?: string,
@@ -582,9 +650,7 @@ async function fetchPubMedIdsForFaculty(
     }
 
     stage = "fetch";
-    const response = await fetch(url, {
-      cache: "no-store",
-    });
+    const response = await runPubMedRequestWithThrottleAndRetry("esearch", url, facultyName);
     const responseBody = await response.text();
 
     if (isAkbarWaljee) {
@@ -636,16 +702,22 @@ async function fetchPubMedIdsForFaculty(
   }
 }
 
-async function fetchPubMedDetailsByPmid(pmid: string): Promise<ParsedPublication | null> {
+async function fetchPubMedDetailsByPmid(
+  pmid: string,
+  facultyName: string,
+): Promise<ParsedPublication | null> {
   const params = new URLSearchParams({
     db: "pubmed",
     id: pmid,
     retmode: "xml",
   });
   const detailsUrl = `https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi?${params.toString()}`;
-  const response = await fetch(detailsUrl, {
-    cache: "no-store",
-  });
+  const response = await runPubMedRequestWithThrottleAndRetry(
+    "efetch",
+    detailsUrl,
+    facultyName,
+    pmid,
+  );
   const body = await response.text();
   const trimmedBody = body.trim();
   const isXml = trimmedBody.startsWith("<");
@@ -690,7 +762,7 @@ async function fetchPubMedDetails(pmids: string[], facultyName: string): Promise
 
   for (const pmid of sanitizedPmids) {
     try {
-      const publication = await fetchPubMedDetailsByPmid(pmid);
+      const publication = await fetchPubMedDetailsByPmid(pmid, facultyName);
       if (!publication) {
         console.info(
           `[pubmed-debug] details_empty_result faculty="${facultyName}" pmid=${pmid}`,
