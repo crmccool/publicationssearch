@@ -10,7 +10,7 @@ const cards = [
   {
     title: "Run Publication Search",
     description:
-      "Start the publication matching workflow (PubMed integration coming in a future iteration).",
+      "Start hybrid publication matching with PubMed-first retrieval and ORCID-assisted disambiguation.",
     href: "/search",
   },
   {

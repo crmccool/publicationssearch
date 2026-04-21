@@ -69,7 +69,8 @@ export default function ResultsPage() {
     <section className="card">
       <h1 className="text-2xl font-bold text-slate-900">Results</h1>
       <p className="mt-2 text-sm text-slate-600">
-        Review ORCID-driven publication matches and filter by international status and confidence.
+        Review hybrid PubMed-first publication matches and filter by international status and
+        confidence.
       </p>
       {runSummary ? (
         <div className="mt-4 rounded-md border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-900">
@@ -113,7 +114,8 @@ export default function ResultsPage() {
           >
             <option value="all">All</option>
             <option value="high">high</option>
-            <option value="low">low</option>
+            <option value="medium">medium</option>
+            <option value="high_orcid">high_orcid</option>
           </select>
         </label>
       </div>
