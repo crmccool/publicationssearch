@@ -316,32 +316,68 @@ function evaluateDateRange(
   publicationDate: string,
   startDate?: string,
   endDate?: string,
-): { isWithinRange: boolean; parsedDate: Date | null } {
+): {
+  isWithinRange: boolean;
+  parsedDate: Date | null;
+  parsedStartDate: Date | null;
+  parsedEndDate: Date | null;
+  comparisonResult: "within_range" | "before_start" | "after_end" | "publication_unparseable";
+} {
+  const parsedStartDate = startDate ? parseDateForRange(startDate) : null;
+  const parsedEndDate = endDate ? parseDateForRange(endDate) : null;
+
   if (!startDate && !endDate) {
     return {
       // Date should not be a hard blocker if no date range is requested.
       isWithinRange: true,
       parsedDate: parseDateForRange(publicationDate),
+      parsedStartDate,
+      parsedEndDate,
+      comparisonResult: "within_range",
     };
   }
 
   const publication = parseDateForRange(publicationDate);
   if (!publication) {
-    return { isWithinRange: false, parsedDate: null };
+    return {
+      isWithinRange: false,
+      parsedDate: null,
+      parsedStartDate,
+      parsedEndDate,
+      comparisonResult: "publication_unparseable",
+    };
   }
 
-  const start = startDate ? new Date(`${startDate}T00:00:00Z`) : null;
-  const end = endDate ? new Date(`${endDate}T23:59:59Z`) : null;
+  const start = parsedStartDate;
+  const end = parsedEndDate;
 
   if (start && publication < start) {
-    return { isWithinRange: false, parsedDate: publication };
+    return {
+      isWithinRange: false,
+      parsedDate: publication,
+      parsedStartDate,
+      parsedEndDate,
+      comparisonResult: "before_start",
+    };
   }
 
   if (end && publication > end) {
-    return { isWithinRange: false, parsedDate: publication };
+    return {
+      isWithinRange: false,
+      parsedDate: publication,
+      parsedStartDate,
+      parsedEndDate,
+      comparisonResult: "after_end",
+    };
   }
 
-  return { isWithinRange: true, parsedDate: publication };
+  return {
+    isWithinRange: true,
+    parsedDate: publication,
+    parsedStartDate,
+    parsedEndDate,
+    comparisonResult: "within_range",
+  };
 }
 
 function isUMichAffiliation(affiliation: string): boolean {
@@ -637,6 +673,11 @@ export async function searchFacultyPublications(
       const dateEvaluated = publications.map((publication) => {
         const dateEvaluation = evaluateDateRange(publication.publicationDate, startDate, endDate);
         const passesDate = PUBMED_DEBUG_DISABLE_DATE_FILTER ? true : dateEvaluation.isWithinRange;
+        const dateRejectionReason = passesDate
+          ? "none"
+          : dateEvaluation.comparisonResult === "publication_unparseable"
+            ? "date_unparseable"
+            : "date_out_of_range";
 
         if (!dateEvaluation.parsedDate) {
           console.info(
@@ -646,7 +687,7 @@ export async function searchFacultyPublications(
 
         if (isTargetFaculty) {
           console.info(
-            `[pubmed-debug] faculty="${facultyName}" pmid=${publication.pmid} raw_publication_date="${publication.publicationDate}" parsed_date="${dateEvaluation.parsedDate ? dateEvaluation.parsedDate.toISOString() : "null"}" is_within_date_range=${dateEvaluation.isWithinRange}`,
+            `[pubmed-debug] faculty="${facultyName}" pmid=${publication.pmid} raw_publication_date="${publication.publicationDate}" parsed_date="${dateEvaluation.parsedDate ? dateEvaluation.parsedDate.toISOString() : "null"}" received_startDate="${startDate ?? "undefined"}" received_endDate="${endDate ?? "undefined"}" parsed_startDate="${dateEvaluation.parsedStartDate ? dateEvaluation.parsedStartDate.toISOString() : "null"}" parsed_endDate="${dateEvaluation.parsedEndDate ? dateEvaluation.parsedEndDate.toISOString() : "null"}" date_comparison_result="${dateEvaluation.comparisonResult}" is_within_date_range=${dateEvaluation.isWithinRange} rejection_reason="${dateRejectionReason}"`,
           );
         }
 
