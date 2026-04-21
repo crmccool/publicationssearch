@@ -64,6 +64,7 @@ const PUBMED_EXPANDED_PMIDS_PER_FACULTY = 60;
 const PUBMED_EFETCH_BATCH_SIZE = 5;
 const PUBMED_EARLY_EXIT_MATCH_COUNT = 8;
 const PUBMED_RUN_SOFT_CAP_MS = 45_000;
+const PUBMED_FORENSIC_TARGET_PMID = "41924702";
 
 type PubMedRequestType = "esearch" | "efetch";
 
@@ -909,6 +910,18 @@ function getConfidence(
   return "medium";
 }
 
+function buildForensicFaculty(firstName: string, lastName: string): FacultyRecord {
+  return {
+    first_name: firstName,
+    last_name: lastName,
+    first_initial: firstName.charAt(0),
+    email: `${firstName.toLowerCase()}.${lastName.toLowerCase()}@forensic.local`,
+    status: "ACTIVE",
+    primary_department: "",
+    orcid: "",
+  };
+}
+
 export async function searchFacultyPublications(
   facultyRows: FacultyRecord[],
   startDate?: string,
@@ -995,6 +1008,15 @@ export async function searchFacultyPublications(
           }
 
           const dateEvaluation = evaluateDateRange(publication.publicationDate, startDate, endDate);
+          const isForensicTarget = publication.pmid === PUBMED_FORENSIC_TARGET_PMID;
+          const cherylMoyerMatch = matchAuthorName(
+            buildForensicFaculty("Cheryl", "Moyer"),
+            publication,
+          );
+          const akbarWaljeeMatch = matchAuthorName(
+            buildForensicFaculty("Akbar", "Waljee"),
+            publication,
+          );
           if (facultyName.toLowerCase() === "cheryl moyer" && phase === "initial") {
             console.info(
               `[pubmed-debug] cheryl_date_probe faculty="${facultyName}" pmid="${publication.pmid}" raw_publication_date="${publication.publicationDate}" parsed_publication_date="${dateEvaluation.parsedDate?.toISOString().slice(0, 10) ?? "null"}" comparison_result="${dateEvaluation.comparisonResult}"`,
@@ -1002,6 +1024,21 @@ export async function searchFacultyPublications(
           }
 
           const passesDate = PUBMED_DEBUG_DISABLE_DATE_FILTER ? true : dateEvaluation.isWithinRange;
+          if (isForensicTarget) {
+            const hasUmAffiliationRaw = hasUMichAffiliation(publication.allAffiliations);
+            let forensicReason = "included";
+            if (!passesDate) {
+              forensicReason = "excluded_date_filter";
+            } else if (!(PUBMED_DEBUG_DISABLE_AUTHOR_FILTER ? true : matchAuthorName(faculty, publication))) {
+              forensicReason = "excluded_faculty_author_mismatch";
+            } else if (!(PUBMED_DEBUG_DISABLE_UM_AFFILIATION_FILTER ? true : hasUmAffiliationRaw)) {
+              forensicReason = "excluded_um_affiliation_filter";
+            }
+
+            console.info(
+              `[pubmed-forensic] faculty="${facultyName}" phase="${phase}" pmid="${publication.pmid}" title="${publication.title}" parsed_publication_date="${dateEvaluation.parsedDate?.toISOString().slice(0, 10) ?? "null"}" date_filter_passed=${passesDate} cheryl_moyer_author_match=${cherylMoyerMatch} akbar_waljee_author_match=${akbarWaljeeMatch} um_affiliation_filter_passed=${hasUmAffiliationRaw} final_reason="${forensicReason}"`,
+            );
+          }
           if (passesDate) {
             afterDateFilterCount += 1;
           } else {
