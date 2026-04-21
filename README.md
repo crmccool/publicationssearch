@@ -20,9 +20,10 @@ A first MVP scaffold for an internal admin/review tool to identify publications 
   - Preview of uploaded rows
   - Live list of currently stored faculty rows from Supabase
 - Publication Search page with date range inputs and Run Search action for ACTIVE faculty
-- ORCID-driven publication retrieval pipeline:
-  - fetch works from ORCID public API
-  - resolve PMID directly or via DOI search in PubMed
+- Hybrid PubMed + ORCID publication retrieval pipeline:
+  - PubMed is the primary retrieval source using broad author + date-range queries
+  - candidate records are filtered in code by name match and publication-level U-M affiliation
+  - ORCID is used only as an optional identity/disambiguation support signal when present in PubMed metadata
   - fetch PubMed metadata and classify international collaborations from all affiliations
 - Results page table with filters for international_flag and confidence
 - Placeholder Export page
@@ -74,14 +75,28 @@ Then open http://localhost:3000.
 - Current MVP behavior treats each roster upload as a refresh of the active list by upserting on `email`.
 - Future enhancement should add true replacement logic (including row removals) and upload history/versioning in a transaction-safe flow.
 
-## Publication Search Behavior (Test Phase)
+## Publication Search Behavior (Hybrid Model)
 
-- Search method is **ORCID-only** for this controlled validation phase.
-- ACTIVE faculty with missing ORCID are intentionally skipped.
-- Name-based PubMed author search is temporarily disabled when using this ORCID-enabled flow.
-- Known gaps:
-  - Some ORCID works do not include PMID.
-  - DOI-to-PMID mapping via PubMed E-utilities is incomplete for non-indexed works.
+- Search method is **hybrid_pubmed_orcid**.
+- PubMed is the authoritative retrieval source.
+  - Query pattern: `(\"Last First\"[Author] OR \"Last F\"[Author] OR \"Last F*\"[Author]) AND (date range)`.
+  - University of Michigan terms are **not** included in the retrieval query to preserve broad recall.
+- Candidate filtering is applied after retrieval:
+  - strong author-name matching (last name + first initial / forename consistency)
+  - publication-level U-M affiliation validation from all affiliations on the paper
+- ORCID behavior:
+  - optional ORCID column is still supported and normalized
+  - ORCID is supplemental for confidence/disambiguation when matching identifiers are present in PubMed metadata
+  - missing ORCID support evidence does not automatically discard a PubMed match
+- International collaboration logic is publication-level:
+  - U-M if affiliation contains `University of Michigan`, `Michigan Medicine`, or `Ann Arbor`
+  - Domestic if affiliation includes U.S. terms or obvious state names/abbreviations
+  - Otherwise classified as International
+  - non-U.S. affiliations with unresolved country are marked `unknown`
+- Known limitations:
+  - common names can still produce ambiguous author matches
+  - PubMed author identifiers and affiliation metadata are sometimes incomplete/inconsistent
+  - country extraction is heuristic and may return `unknown` for noisy affiliation strings
 
 ## Future Scope (Not Included Yet)
 

@@ -17,15 +17,13 @@ export async function POST(request: NextRequest) {
     const activeFaculty = (facultyRows ?? []).filter(
       (row) => row.status.trim().toUpperCase() === "ACTIVE",
     );
-    const activeFacultyWithOrcid = activeFaculty
-      .map((row) => ({
-        ...row,
-        orcid: normalizeOrcid(row.orcid),
-      }))
-      .filter((row) => Boolean(row.orcid));
+    const normalizedActiveFaculty = activeFaculty.map((row) => ({
+      ...row,
+      orcid: normalizeOrcid(row.orcid),
+    }));
 
     const results = await searchFacultyPublications(
-      activeFacultyWithOrcid,
+      normalizedActiveFaculty,
       body.startDate,
       body.endDate,
     );
@@ -34,9 +32,9 @@ export async function POST(request: NextRequest) {
       start_date: body.startDate ?? null,
       end_date: body.endDate ?? null,
       run_timestamp: new Date().toISOString(),
-      faculty_count_searched: activeFacultyWithOrcid.length,
+      faculty_count_searched: normalizedActiveFaculty.length,
       result_count: results.length,
-      search_method: "ORCID",
+      search_method: "hybrid_pubmed_orcid",
       results,
     });
   } catch (error) {

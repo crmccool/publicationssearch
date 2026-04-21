@@ -5,16 +5,19 @@ import {
   PublicationSearchResult,
 } from "@/lib/types/publication-search";
 
+type ParsedAuthor = {
+  lastName: string;
+  foreName: string;
+  initials: string;
+  identifierValues: string[];
+};
+
 type ParsedPublication = {
   pmid: string;
   title: string;
   publicationDate: string;
   allAffiliations: string[];
-};
-
-type OrcidWorkIdentifier = {
-  doi?: string;
-  pmid?: string;
+  authors: ParsedAuthor[];
 };
 
 const US_STATE_TERMS = [
@@ -185,6 +188,35 @@ function parsePublicationDate(articleBlock: string): string {
   return medlineDate || "Unknown";
 }
 
+function parseAuthors(articleBlock: string): ParsedAuthor[] {
+  const authorRegex = /<Author(?: [^>]*)?>([\s\S]*?)<\/Author>/g;
+  const authors: ParsedAuthor[] = [];
+
+  let match = authorRegex.exec(articleBlock);
+  while (match) {
+    const authorBlock = match[1];
+    const lastName = getTagValue(authorBlock, "LastName");
+    const foreName = getTagValue(authorBlock, "ForeName");
+    const initials = getTagValue(authorBlock, "Initials");
+    const identifierValues = getAllTagValues(authorBlock, "Identifier").map((value) =>
+      value.toLowerCase(),
+    );
+
+    if (lastName) {
+      authors.push({
+        lastName,
+        foreName,
+        initials,
+        identifierValues,
+      });
+    }
+
+    match = authorRegex.exec(articleBlock);
+  }
+
+  return authors;
+}
+
 function parsePubmedArticles(xml: string): ParsedPublication[] {
   const publications: ParsedPublication[] = [];
   const articleRegex = /<PubmedArticle>([\s\S]*?)<\/PubmedArticle>/g;
@@ -197,6 +229,7 @@ function parsePubmedArticles(xml: string): ParsedPublication[] {
     const title = getTagValue(articleBlock, "ArticleTitle");
     const publicationDate = parsePublicationDate(articleBlock);
     const allAffiliations = getAllTagValues(articleBlock, "Affiliation");
+    const authors = parseAuthors(articleBlock);
 
     if (pmid && title) {
       publications.push({
@@ -204,6 +237,7 @@ function parsePubmedArticles(xml: string): ParsedPublication[] {
         title,
         publicationDate,
         allAffiliations,
+        authors,
       });
     }
 
@@ -211,119 +245,6 @@ function parsePubmedArticles(xml: string): ParsedPublication[] {
   }
 
   return publications;
-}
-
-function normalizeDoi(value: string): string {
-  return value.replace(/^https?:\/\/doi\.org\//i, "").trim();
-}
-
-async function fetchOrcidWorks(orcid: string): Promise<OrcidWorkIdentifier[]> {
-  const response = await fetch(`https://pub.orcid.org/v3.0/${orcid}/works`, {
-    cache: "no-store",
-    headers: {
-      Accept: "application/json",
-    },
-  });
-
-  if (!response.ok) {
-    throw new Error(`ORCID works request failed for ${orcid}.`);
-  }
-
-  const data = (await response.json()) as {
-    group?: Array<{
-      "external-ids"?: {
-        "external-id"?: Array<{
-          "external-id-type"?: string;
-          "external-id-value"?: string;
-        }>;
-      };
-    }>;
-  };
-
-  const identifiers: OrcidWorkIdentifier[] = [];
-
-  for (const group of data.group ?? []) {
-    const externalIds = group["external-ids"]?.["external-id"] ?? [];
-    let pmid: string | undefined;
-    let doi: string | undefined;
-
-    for (const externalId of externalIds) {
-      const type = (externalId["external-id-type"] ?? "").toLowerCase();
-      const value = (externalId["external-id-value"] ?? "").trim();
-
-      if (!value) {
-        continue;
-      }
-
-      if (type === "pmid") {
-        pmid = value;
-      }
-
-      if (type === "doi") {
-        doi = normalizeDoi(value);
-      }
-    }
-
-    if (pmid || doi) {
-      identifiers.push({ pmid, doi });
-    }
-  }
-
-  return identifiers;
-}
-
-async function fetchPubMedIdsByDoi(doi: string): Promise<string[]> {
-  const params = new URLSearchParams({
-    db: "pubmed",
-    term: `${doi}[DOI]`,
-    retmode: "json",
-    retmax: "20",
-  });
-
-  const response = await fetch(
-    `https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi?${params.toString()}`,
-    {
-      cache: "no-store",
-    },
-  );
-
-  if (!response.ok) {
-    throw new Error(`PubMed DOI lookup failed for DOI ${doi}.`);
-  }
-
-  const data = (await response.json()) as {
-    esearchresult?: {
-      idlist?: string[];
-    };
-  };
-
-  return data.esearchresult?.idlist ?? [];
-}
-
-async function fetchPubMedDetails(pmids: string[]): Promise<ParsedPublication[]> {
-  if (pmids.length === 0) {
-    return [];
-  }
-
-  const params = new URLSearchParams({
-    db: "pubmed",
-    id: pmids.join(","),
-    retmode: "xml",
-  });
-
-  const response = await fetch(
-    `https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi?${params.toString()}`,
-    {
-      cache: "no-store",
-    },
-  );
-
-  if (!response.ok) {
-    throw new Error("PubMed details request failed.");
-  }
-
-  const xml = await response.text();
-  return parsePubmedArticles(xml);
 }
 
 function parseDateForRange(value: string): Date | null {
@@ -401,10 +322,20 @@ function isUMichAffiliation(affiliation: string): boolean {
   );
 }
 
+function hasUMichAffiliation(affiliations: string[]): boolean {
+  return affiliations.some((affiliation) => isUMichAffiliation(affiliation));
+}
+
 function isDomesticAffiliation(affiliation: string): boolean {
   const normalized = affiliation.toLowerCase();
 
-  if (normalized.includes("united states") || normalized.includes("usa") || normalized.includes("u.s.a")) {
+  if (
+    normalized.includes("united states") ||
+    normalized.includes("usa") ||
+    normalized.includes("u.s.") ||
+    normalized.includes("u.s.a") ||
+    normalized.includes("america")
+  ) {
     return true;
   }
 
@@ -491,29 +422,141 @@ function classifyPublicationAffiliations(affiliations: string[]): {
   };
 }
 
-async function resolvePmidsFromOrcid(orcid: string): Promise<string[]> {
-  const identifiers = await fetchOrcidWorks(orcid);
-  const pmids = new Set<string>();
+function normalizeAlphaText(value: string): string {
+  return value.toLowerCase().replace(/[^a-z]/g, "");
+}
 
-  // ORCID works do not always include PMIDs; DOI-to-PMID resolution fills part of that gap,
-  // but some DOI records are not indexed in PubMed and will remain unresolved.
-  for (const identifier of identifiers) {
-    if (identifier.pmid) {
-      pmids.add(identifier.pmid);
-      continue;
-    }
+function buildPubMedAuthorQuery(faculty: FacultyRecord, startDate?: string, endDate?: string): string {
+  const trimmedFirst = faculty.first_name.trim();
+  const firstToken = trimmedFirst.split(/\s+/)[0] ?? "";
+  const firstInitial = (faculty.first_initial || firstToken.charAt(0)).trim();
+  const last = faculty.last_name.trim();
 
-    if (!identifier.doi) {
-      continue;
-    }
+  const authorClause = `("${last} ${firstToken}"[Author] OR "${last} ${firstInitial}"[Author] OR "${last} ${firstInitial}*"[Author])`;
 
-    const resolvedPmids = await fetchPubMedIdsByDoi(identifier.doi);
-    for (const pmid of resolvedPmids) {
-      pmids.add(pmid);
-    }
+  if (!startDate && !endDate) {
+    return authorClause;
   }
 
-  return [...pmids];
+  const start = startDate ?? "1900/01/01";
+  const end = endDate ?? "3000/12/31";
+  const dateClause = `("${start}"[Date - Publication] : "${end}"[Date - Publication])`;
+
+  return `${authorClause} AND ${dateClause}`;
+}
+
+async function fetchPubMedIdsForFaculty(
+  faculty: FacultyRecord,
+  startDate?: string,
+  endDate?: string,
+): Promise<string[]> {
+  const params = new URLSearchParams({
+    db: "pubmed",
+    term: buildPubMedAuthorQuery(faculty, startDate, endDate),
+    retmode: "json",
+    retmax: "200",
+  });
+
+  const response = await fetch(
+    `https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi?${params.toString()}`,
+    {
+      cache: "no-store",
+    },
+  );
+
+  if (!response.ok) {
+    throw new Error(`PubMed author search failed for ${faculty.last_name}.`);
+  }
+
+  const data = (await response.json()) as {
+    esearchresult?: {
+      idlist?: string[];
+    };
+  };
+
+  return data.esearchresult?.idlist ?? [];
+}
+
+async function fetchPubMedDetails(pmids: string[]): Promise<ParsedPublication[]> {
+  if (pmids.length === 0) {
+    return [];
+  }
+
+  const params = new URLSearchParams({
+    db: "pubmed",
+    id: pmids.join(","),
+    retmode: "xml",
+  });
+
+  const response = await fetch(
+    `https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi?${params.toString()}`,
+    {
+      cache: "no-store",
+    },
+  );
+
+  if (!response.ok) {
+    throw new Error("PubMed details request failed.");
+  }
+
+  const xml = await response.text();
+  return parsePubmedArticles(xml);
+}
+
+function matchAuthorName(faculty: FacultyRecord, publication: ParsedPublication): boolean {
+  const facultyLast = normalizeAlphaText(faculty.last_name);
+  const facultyInitial = normalizeAlphaText(faculty.first_initial || faculty.first_name.slice(0, 1));
+  const facultyFirstToken = normalizeAlphaText(faculty.first_name.split(/\s+/)[0] ?? "");
+
+  return publication.authors.some((author) => {
+    const authorLast = normalizeAlphaText(author.lastName);
+    if (!authorLast || authorLast !== facultyLast) {
+      return false;
+    }
+
+    const authorFirst = normalizeAlphaText(author.foreName);
+    const authorInitials = normalizeAlphaText(author.initials);
+
+    if (facultyFirstToken && authorFirst && authorFirst.startsWith(facultyFirstToken)) {
+      return true;
+    }
+
+    if (facultyInitial && authorInitials && authorInitials.startsWith(facultyInitial)) {
+      return true;
+    }
+
+    return facultyInitial ? authorFirst.startsWith(facultyInitial) : false;
+  });
+}
+
+function hasOrcidAuthorSupport(faculty: FacultyRecord, publication: ParsedPublication): boolean {
+  if (!faculty.orcid) {
+    return false;
+  }
+
+  const normalizedOrcid = faculty.orcid.toLowerCase();
+  return publication.authors.some((author) =>
+    author.identifierValues.some((value) => value.includes(normalizedOrcid)),
+  );
+}
+
+function getConfidence(
+  faculty: FacultyRecord,
+  publication: ParsedPublication,
+  hasNameMatch: boolean,
+): PublicationConfidence {
+  const hasUmAtPaperLevel = hasUMichAffiliation(publication.allAffiliations);
+  const hasOrcidSupport = hasOrcidAuthorSupport(faculty, publication);
+
+  if (hasOrcidSupport) {
+    return "high_orcid";
+  }
+
+  if (hasNameMatch && hasUmAtPaperLevel) {
+    return "high";
+  }
+
+  return "medium";
 }
 
 export async function searchFacultyPublications(
@@ -523,20 +566,32 @@ export async function searchFacultyPublications(
 ): Promise<PublicationSearchResult[]> {
   const results: PublicationSearchResult[] = [];
   const delayBetweenRequestsMs = 200;
+  const seenFacultyPmid = new Set<string>();
 
   for (const faculty of facultyRows) {
-    if (!faculty.orcid) {
-      continue;
-    }
-
     try {
-      const pmids = await resolvePmidsFromOrcid(faculty.orcid);
+      const pmids = await fetchPubMedIdsForFaculty(faculty, startDate, endDate);
       const publications = await fetchPubMedDetails(pmids);
 
       for (const publication of publications) {
         if (!isWithinDateRange(publication.publicationDate, startDate, endDate)) {
           continue;
         }
+
+        const hasNameMatch = matchAuthorName(faculty, publication);
+        if (!hasNameMatch) {
+          continue;
+        }
+
+        if (!hasUMichAffiliation(publication.allAffiliations)) {
+          continue;
+        }
+
+        const dedupeKey = `${faculty.email}::${publication.pmid}`;
+        if (seenFacultyPmid.has(dedupeKey)) {
+          continue;
+        }
+        seenFacultyPmid.add(dedupeKey);
 
         const classification = classifyPublicationAffiliations(publication.allAffiliations);
 
@@ -547,7 +602,7 @@ export async function searchFacultyPublications(
           PMID: publication.pmid,
           international_flag: classification.internationalFlag,
           international_countries: classification.internationalCountries,
-          confidence: "high" as PublicationConfidence,
+          confidence: getConfidence(faculty, publication, hasNameMatch),
         });
       }
     } catch (error) {

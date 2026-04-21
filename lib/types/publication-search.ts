@@ -1,6 +1,6 @@
 export type InternationalFlag = "true" | "false" | "unknown";
 
-export type PublicationConfidence = "high" | "low";
+export type PublicationConfidence = "high" | "medium" | "high_orcid";
 
 export type PublicationSearchResult = {
   faculty_name: string;
@@ -23,7 +23,7 @@ export type PublicationSearchRunSummary = {
   run_timestamp: string;
   faculty_count_searched: number;
   result_count: number;
-  search_method: "ORCID";
+  search_method: "hybrid_pubmed_orcid";
 };
 
 export type PublicationSearchStoredPayload = {
