@@ -62,13 +62,29 @@ export async function listFacultyRows(): Promise<SupabaseResult<FacultyRecord[]>
 export async function saveFacultyRows(
   rows: FacultyRecord[],
 ): Promise<SupabaseResult<FacultyRecord[]>> {
-  // For MVP we treat uploads as a refresh of the active list by upserting on email.
-  // FUTURE: Replace this with server-side replacement/upsert logic that can handle
-  // row removals, versioning, and audit history in one transaction.
-  return runSupabaseRequest<FacultyRecord[]>(`${FACULTY_TABLE}?on_conflict=email`, {
+  // Uploads perform a full roster replacement: clear existing rows, then insert CSV rows.
+  const deleteResult = await runSupabaseRequest<FacultyRecord[]>(
+    `${FACULTY_TABLE}?email=neq.`,
+    {
+      method: "DELETE",
+      headers: {
+        Prefer: "return=representation",
+      },
+    },
+  );
+
+  if (deleteResult.error) {
+    return { data: null, error: deleteResult.error };
+  }
+
+  if (rows.length === 0) {
+    return { data: [], error: null };
+  }
+
+  return runSupabaseRequest<FacultyRecord[]>(FACULTY_TABLE, {
     method: "POST",
     headers: {
-      Prefer: "resolution=merge-duplicates,return=representation",
+      Prefer: "return=representation",
     },
     body: JSON.stringify(rows),
   });
