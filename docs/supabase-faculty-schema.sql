@@ -6,6 +6,7 @@
 --   first_initial
 --   primary_department
 --   status
+--   orcid (optional, normalized ID only)
 --
 -- Notes:
 -- * email is modeled as UNIQUE so roster uploads can upsert by email.
@@ -20,6 +21,10 @@ create table if not exists public.faculty (
   first_initial text not null,
   primary_department text not null,
   status text not null,
+  orcid text,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
+
+alter table public.faculty
+add column if not exists orcid text;

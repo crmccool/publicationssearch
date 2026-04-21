@@ -57,6 +57,7 @@ export default function SearchPage() {
         run_timestamp?: string;
         faculty_count_searched?: number;
         result_count?: number;
+        search_method?: "ORCID";
         results?: PublicationSearchResult[];
         error?: string;
       };
@@ -75,6 +76,7 @@ export default function SearchPage() {
         run_timestamp: payload.run_timestamp ?? new Date().toISOString(),
         faculty_count_searched: payload.faculty_count_searched ?? 0,
         result_count: payload.result_count ?? 0,
+        search_method: payload.search_method ?? "ORCID",
       };
 
       const storedPayload: PublicationSearchStoredPayload = {
@@ -101,8 +103,8 @@ export default function SearchPage() {
     <section className="card">
       <h1 className="text-2xl font-bold text-slate-900">Publication Search</h1>
       <p className="mt-3 text-sm text-slate-600">
-        Search PubMed for all <strong>ACTIVE</strong> faculty using strict author-affiliation
-        matching for University of Michigan records.
+        Search PubMed for all <strong>ACTIVE</strong> faculty with ORCID IDs using an ORCID → PMID
+        retrieval flow.
       </p>
 
       <div className="mt-6 grid gap-4 md:grid-cols-2">
@@ -128,7 +130,8 @@ export default function SearchPage() {
       </div>
 
       <p className="mt-3 text-xs text-slate-500">
-        Leave dates blank to search all years for ACTIVE faculty only.
+        Leave dates blank to search all years. During this test phase, faculty without ORCID are
+        skipped.
       </p>
 
       <button

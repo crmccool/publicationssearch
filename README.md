@@ -20,7 +20,10 @@ A first MVP scaffold for an internal admin/review tool to identify publications 
   - Preview of uploaded rows
   - Live list of currently stored faculty rows from Supabase
 - Publication Search page with date range inputs and Run Search action for ACTIVE faculty
-- PubMed matching backend with strict author + University of Michigan affiliation validation
+- ORCID-driven publication retrieval pipeline:
+  - fetch works from ORCID public API
+  - resolve PMID directly or via DOI search in PubMed
+  - fetch PubMed metadata and classify international collaborations from all affiliations
 - Results page table with filters for international_flag and confidence
 - Placeholder Export page
 
@@ -32,6 +35,12 @@ A first MVP scaffold for an internal admin/review tool to identify publications 
 - `first_initial`
 - `primary_department`
 - `status`
+
+### Optional Faculty Roster Columns
+
+- `orcid`
+  - Supports either `https://orcid.org/0000-0000-0000-0000` or bare `0000-0000-0000-0000`.
+  - Values are normalized and stored internally as the bare ORCID ID.
 
 ## Supabase Setup
 
@@ -64,6 +73,15 @@ Then open http://localhost:3000.
 
 - Current MVP behavior treats each roster upload as a refresh of the active list by upserting on `email`.
 - Future enhancement should add true replacement logic (including row removals) and upload history/versioning in a transaction-safe flow.
+
+## Publication Search Behavior (Test Phase)
+
+- Search method is **ORCID-only** for this controlled validation phase.
+- ACTIVE faculty with missing ORCID are intentionally skipped.
+- Name-based PubMed author search is temporarily disabled when using this ORCID-enabled flow.
+- Known gaps:
+  - Some ORCID works do not include PMID.
+  - DOI-to-PMID mapping via PubMed E-utilities is incomplete for non-indexed works.
 
 ## Future Scope (Not Included Yet)
 

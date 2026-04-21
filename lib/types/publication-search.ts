@@ -23,6 +23,7 @@ export type PublicationSearchRunSummary = {
   run_timestamp: string;
   faculty_count_searched: number;
   result_count: number;
+  search_method: "ORCID";
 };
 
 export type PublicationSearchStoredPayload = {
