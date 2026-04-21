@@ -22,12 +22,21 @@ export type PublicationSearchRunSummary = {
   end_date: string | null;
   run_timestamp: string;
   faculty_count_searched: number;
+  faculty_count_failed?: number;
   result_count: number;
   search_method: "hybrid_pubmed_orcid";
 };
 
+export type FacultySearchError = {
+  faculty_name: string;
+  stage: "request_construction" | "fetch" | "response_parsing" | "candidate_extraction" | "unknown";
+  message: string;
+  stack?: string;
+};
+
 export type PublicationSearchStoredPayload = {
   run_summary: PublicationSearchRunSummary;
+  faculty_errors?: FacultySearchError[];
   results: PublicationSearchResult[];
 };
 
