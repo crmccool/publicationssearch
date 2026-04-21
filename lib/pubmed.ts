@@ -241,13 +241,14 @@ function extractInternationalCountries(
 
 function buildQueryTerm(faculty: FacultyRecord, startDate?: string, endDate?: string): string {
   const authorTerm = `${escapeTerm(faculty.last_name)} ${escapeTerm(faculty.first_initial)}[Author]`;
-  const umTerm = `"University of Michigan"[Affiliation]`;
 
   const dateRangeStart = startDate || "1900/01/01";
   const dateRangeEnd = endDate || "3000/12/31";
   const dateTerm = `("${dateRangeStart}"[Date - Publication] : "${dateRangeEnd}"[Date - Publication])`;
 
-  return `${authorTerm} AND ${umTerm} AND ${dateTerm}`;
+  // Intentionally keep the PubMed query broad and apply University of Michigan affiliation
+  // filtering in code so valid results are not missed because of PubMed ranking and retmax limits.
+  return `${authorTerm} AND ${dateTerm}`;
 }
 
 async function fetchPubMedIds(term: string): Promise<string[]> {
