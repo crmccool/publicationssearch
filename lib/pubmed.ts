@@ -60,6 +60,7 @@ const PUBMED_MIN_REQUEST_INTERVAL_MS = 250;
 const PUBMED_429_MAX_RETRIES = 2;
 const PUBMED_429_BASE_BACKOFF_MS = 2500;
 const PUBMED_MAX_PMIDS_PER_FACULTY = 25;
+const PUBMED_EXPANDED_PMIDS_PER_FACULTY = 60;
 const PUBMED_EFETCH_BATCH_SIZE = 5;
 const PUBMED_EARLY_EXIT_MATCH_COUNT = 8;
 const PUBMED_RUN_SOFT_CAP_MS = 45_000;
@@ -211,6 +212,26 @@ function getAllTagValues(block: string, tagName: string): string[] {
 }
 
 function parsePublicationDate(articleBlock: string): string {
+  const articleDateBlockMatch = articleBlock.match(/<ArticleDate(?: [^>]*)?>([\s\S]*?)<\/ArticleDate>/);
+  if (articleDateBlockMatch) {
+    const articleDateBlock = articleDateBlockMatch[1];
+    const articleYear = getTagValue(articleDateBlock, "Year");
+    const articleMonth = getTagValue(articleDateBlock, "Month");
+    const articleDay = getTagValue(articleDateBlock, "Day");
+
+    if (articleYear && articleMonth && articleDay) {
+      return `${articleYear}-${articleMonth}-${articleDay}`;
+    }
+
+    if (articleYear && articleMonth) {
+      return `${articleYear}-${articleMonth}`;
+    }
+
+    if (articleYear) {
+      return articleYear;
+    }
+  }
+
   const pubDateBlockMatch = articleBlock.match(/<PubDate>([\s\S]*?)<\/PubDate>/);
   if (!pubDateBlockMatch) {
     return "Unknown";
@@ -415,15 +436,24 @@ function evaluateDateRange(
 
 function isUMichAffiliation(affiliation: string): boolean {
   const normalized = affiliation.toLowerCase();
+  const compact = normalized.replace(/[^a-z0-9]+/g, " ").replace(/\s+/g, " ").trim();
   return (
     normalized.includes("university of michigan") ||
     normalized.includes("univ of michigan") ||
+    normalized.includes("u of michigan") ||
+    normalized.includes("u-m") ||
+    normalized.includes("u m ") ||
     normalized.includes("u michigan") ||
     normalized.includes("u. michigan") ||
+    normalized.includes("university of michigan health") ||
+    normalized.includes("university of michigan health system") ||
     normalized.includes("umich") ||
+    compact.includes("um hs") ||
+    compact.includes("umhs") ||
     normalized.includes("michigan medicine") ||
     normalized.includes("michigan health") ||
     normalized.includes("michigan med") ||
+    (normalized.includes("department of") && normalized.includes("university of michigan")) ||
     normalized.includes("c.s. mott") ||
     normalized.includes("von voitlander") ||
     normalized.includes("rogel cancer center") ||
@@ -910,7 +940,7 @@ export async function searchFacultyPublications(
       const isAkbarWaljee = facultyName.toLowerCase() === "akbar waljee";
       const { pmids } = idSearchResult;
       const sanitizedPmids = [...new Set(pmids.map((pmid) => pmid.trim()).filter(Boolean))];
-      const candidatePmids = sanitizedPmids.slice(0, PUBMED_MAX_PMIDS_PER_FACULTY);
+      let candidatePmids = sanitizedPmids.slice(0, PUBMED_MAX_PMIDS_PER_FACULTY);
       const detailsParams = new URLSearchParams({
         db: "pubmed",
         id: candidatePmids.slice(0, PUBMED_EFETCH_BATCH_SIZE).join(","),
@@ -947,48 +977,99 @@ export async function searchFacultyPublications(
         `[pubmed-debug] faculty="${facultyName}" query='${idSearchResult.query}' total_pmids=${idSearchResult.totalCount} returned_pmids=${pmids.length} retmax=${idSearchResult.retmax} retmax_hit=${idSearchResult.retmaxHit} candidate_pmids=${pmids.join(",")}`,
       );
 
-      let pmidsProcessed = 0;
-      let afterDateFilterCount = 0;
-      let afterAuthorFilterCount = 0;
-      let afterUmAffiliationCount = 0;
+      const evaluatePublicationSet = (currentPublications: ParsedPublication[], phase: "initial" | "expanded") => {
+        let pmidsProcessed = 0;
+        let afterDateFilterCount = 0;
+        let afterAuthorFilterCount = 0;
+        let afterUmAffiliationCount = 0;
+        const accepted: Array<{ publication: ParsedPublication; hasNameMatchRaw: boolean }> = [];
+
+        for (const publication of currentPublications) {
+          pmidsProcessed += 1;
+
+          if (!publication.pmid || !publication.publicationDate || publication.authors.length === 0) {
+            console.info(
+              `[pubmed-debug] skipped_missing_metadata faculty="${facultyName}" pmid="${publication.pmid || "unknown"}"`,
+            );
+            continue;
+          }
+
+          const dateEvaluation = evaluateDateRange(publication.publicationDate, startDate, endDate);
+          if (facultyName.toLowerCase() === "cheryl moyer" && phase === "initial") {
+            console.info(
+              `[pubmed-debug] cheryl_date_probe faculty="${facultyName}" pmid="${publication.pmid}" raw_publication_date="${publication.publicationDate}" parsed_publication_date="${dateEvaluation.parsedDate?.toISOString().slice(0, 10) ?? "null"}" comparison_result="${dateEvaluation.comparisonResult}"`,
+            );
+          }
+
+          const passesDate = PUBMED_DEBUG_DISABLE_DATE_FILTER ? true : dateEvaluation.isWithinRange;
+          if (passesDate) {
+            afterDateFilterCount += 1;
+          } else {
+            continue;
+          }
+
+          const hasNameMatchRaw = matchAuthorName(faculty, publication);
+          const hasNameMatch = PUBMED_DEBUG_DISABLE_AUTHOR_FILTER ? true : hasNameMatchRaw;
+          if (hasNameMatch) {
+            afterAuthorFilterCount += 1;
+          } else {
+            continue;
+          }
+
+          const hasUmAffiliationRaw = hasUMichAffiliation(publication.allAffiliations);
+          const hasUmAffiliation = PUBMED_DEBUG_DISABLE_UM_AFFILIATION_FILTER
+            ? true
+            : hasUmAffiliationRaw;
+          if (hasUmAffiliation) {
+            afterUmAffiliationCount += 1;
+          } else {
+            if (
+              facultyName.toLowerCase() === "joshua ehrlich" ||
+              facultyName.toLowerCase() === "emma lawrence"
+            ) {
+              console.info(
+                `[pubmed-debug] umich_affiliation_probe faculty="${facultyName}" pmid="${publication.pmid}" affiliation_blob='${publication.allAffiliations.join(" || ").slice(0, 2000)}'`,
+              );
+            }
+            continue;
+          }
+
+          accepted.push({ publication, hasNameMatchRaw });
+
+          if (accepted.length >= PUBMED_EARLY_EXIT_MATCH_COUNT) {
+            console.info(
+              `[pubmed-debug] early_exit faculty="${facultyName}" reason="enough_in_range_matches" accepted=${accepted.length} threshold=${PUBMED_EARLY_EXIT_MATCH_COUNT}`,
+            );
+            break;
+          }
+        }
+
+        return {
+          accepted,
+          pmidsProcessed,
+          afterDateFilterCount,
+          afterAuthorFilterCount,
+          afterUmAffiliationCount,
+        };
+      };
+
+      let evaluation = evaluatePublicationSet(publications, "initial");
+
+      if (
+        evaluation.afterDateFilterCount === 0 &&
+        candidatePmids.length < sanitizedPmids.length
+      ) {
+        const expandedLimit = Math.min(PUBMED_EXPANDED_PMIDS_PER_FACULTY, sanitizedPmids.length);
+        candidatePmids = sanitizedPmids.slice(0, expandedLimit);
+        console.info(
+          `[pubmed-debug] candidate_expansion faculty="${facultyName}" reason="zero_after_date_filter" initial_candidate_count=${PUBMED_MAX_PMIDS_PER_FACULTY} expanded_candidate_count=${candidatePmids.length}`,
+        );
+        publications = await fetchPubMedDetails(candidatePmids, facultyName);
+        evaluation = evaluatePublicationSet(publications, "expanded");
+      }
+
       let finalAcceptedCount = 0;
-
-      for (const publication of publications) {
-        pmidsProcessed += 1;
-
-        if (!publication.pmid || !publication.publicationDate || publication.authors.length === 0) {
-          console.info(
-            `[pubmed-debug] skipped_missing_metadata faculty="${facultyName}" pmid="${publication.pmid || "unknown"}"`,
-          );
-          continue;
-        }
-
-        const dateEvaluation = evaluateDateRange(publication.publicationDate, startDate, endDate);
-        const passesDate = PUBMED_DEBUG_DISABLE_DATE_FILTER ? true : dateEvaluation.isWithinRange;
-        if (passesDate) {
-          afterDateFilterCount += 1;
-        } else {
-          continue;
-        }
-
-        const hasNameMatchRaw = matchAuthorName(faculty, publication);
-        const hasNameMatch = PUBMED_DEBUG_DISABLE_AUTHOR_FILTER ? true : hasNameMatchRaw;
-        if (hasNameMatch) {
-          afterAuthorFilterCount += 1;
-        } else {
-          continue;
-        }
-
-        const hasUmAffiliationRaw = hasUMichAffiliation(publication.allAffiliations);
-        const hasUmAffiliation = PUBMED_DEBUG_DISABLE_UM_AFFILIATION_FILTER
-          ? true
-          : hasUmAffiliationRaw;
-        if (hasUmAffiliation) {
-          afterUmAffiliationCount += 1;
-        } else {
-          continue;
-        }
-
+      for (const { publication, hasNameMatchRaw } of evaluation.accepted) {
         const dedupeKey = `${faculty.email}::${publication.pmid}`;
         if (seenFacultyPmid.has(dedupeKey)) {
           continue;
@@ -996,7 +1077,6 @@ export async function searchFacultyPublications(
         seenFacultyPmid.add(dedupeKey);
 
         const classification = classifyPublicationAffiliations(publication.allAffiliations);
-
         results.push({
           faculty_name: `${faculty.first_name} ${faculty.last_name}`,
           title: publication.title,
@@ -1007,17 +1087,10 @@ export async function searchFacultyPublications(
           confidence: getConfidence(faculty, publication, hasNameMatchRaw),
         });
         finalAcceptedCount += 1;
-
-        if (finalAcceptedCount >= PUBMED_EARLY_EXIT_MATCH_COUNT) {
-          console.info(
-            `[pubmed-debug] early_exit faculty="${facultyName}" reason="enough_in_range_matches" accepted=${finalAcceptedCount} threshold=${PUBMED_EARLY_EXIT_MATCH_COUNT}`,
-          );
-          break;
-        }
       }
 
       console.info(
-        `[pubmed-debug] stage_counts faculty="${facultyName}" pmids_retrieved=${retrievedPmidsCount} candidate_pmids=${candidatePmids.length} parsed_publications=${publications.length} pmids_processed=${pmidsProcessed} after_date_filter=${afterDateFilterCount} after_author_match=${afterAuthorFilterCount} after_umich_affiliation_filter=${afterUmAffiliationCount} disable_date_filter=${PUBMED_DEBUG_DISABLE_DATE_FILTER} disable_author_filter=${PUBMED_DEBUG_DISABLE_AUTHOR_FILTER} disable_umich_filter=${PUBMED_DEBUG_DISABLE_UM_AFFILIATION_FILTER}`,
+        `[pubmed-debug] stage_counts faculty="${facultyName}" pmids_retrieved=${retrievedPmidsCount} candidate_pmids=${candidatePmids.length} parsed_publications=${publications.length} pmids_processed=${evaluation.pmidsProcessed} after_date_filter=${evaluation.afterDateFilterCount} after_author_match=${evaluation.afterAuthorFilterCount} after_umich_affiliation_filter=${evaluation.afterUmAffiliationCount} disable_date_filter=${PUBMED_DEBUG_DISABLE_DATE_FILTER} disable_author_filter=${PUBMED_DEBUG_DISABLE_AUTHOR_FILTER} disable_umich_filter=${PUBMED_DEBUG_DISABLE_UM_AFFILIATION_FILTER}`,
       );
 
       console.info(
