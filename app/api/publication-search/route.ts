@@ -38,7 +38,7 @@ export async function POST(request: NextRequest) {
       faculty_count_searched: normalizedActiveFaculty.length,
       faculty_count_failed: facultyErrors.length,
       result_count: results.length,
-      search_method: "hybrid_pubmed_orcid",
+      search_method: "pubmed_author_only_resilient_details_fetch",
       faculty_errors: facultyErrors,
       results,
     });
