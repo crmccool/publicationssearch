@@ -29,7 +29,15 @@ export type PublicationSearchRunSummary = {
 
 export type FacultySearchError = {
   faculty_name: string;
-  stage: "request_construction" | "fetch" | "response_parsing" | "candidate_extraction" | "unknown";
+  stage:
+    | "request_construction"
+    | "fetch"
+    | "response_parsing"
+    | "candidate_extraction"
+    | "details_request_construction"
+    | "details_fetch"
+    | "details_response_parsing"
+    | "unknown";
   message: string;
   stack?: string;
 };

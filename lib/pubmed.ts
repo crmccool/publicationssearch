@@ -34,6 +34,9 @@ type PubMedSearchFailureStage =
   | "fetch"
   | "response_parsing"
   | "candidate_extraction"
+  | "details_request_construction"
+  | "details_fetch"
+  | "details_response_parsing"
   | "unknown";
 
 export type SearchFacultyPublicationsOutcome = {
@@ -631,38 +634,67 @@ async function fetchPubMedIdsForFaculty(
 }
 
 async function fetchPubMedDetails(pmids: string[]): Promise<ParsedPublication[]> {
-  if (pmids.length === 0) {
+  const sanitizedPmids = [...new Set(pmids.map((pmid) => pmid.trim()).filter(Boolean))];
+  if (sanitizedPmids.length === 0) {
     return [];
   }
 
-  const params = new URLSearchParams({
-    db: "pubmed",
-    id: pmids.join(","),
-    retmode: "xml",
-  });
+  const detailsBatchSize = 50;
+  const allPublications: ParsedPublication[] = [];
 
-  const response = await fetch(
-    `https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi?${params.toString()}`,
-    {
+  for (let i = 0; i < sanitizedPmids.length; i += detailsBatchSize) {
+    const pmidChunk = sanitizedPmids.slice(i, i + detailsBatchSize);
+    const params = new URLSearchParams({
+      db: "pubmed",
+      id: pmidChunk.join(","),
+      retmode: "xml",
+    });
+
+    const detailsUrl = `https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi?${params.toString()}`;
+    const response = await fetch(detailsUrl, {
       cache: "no-store",
-    },
-  );
+    });
+    const body = await response.text();
+    const trimmedBody = body.trim();
+    const isXml = trimmedBody.startsWith("<");
+    const isJson = trimmedBody.startsWith("{") || trimmedBody.startsWith("[");
+    const bodyType = !trimmedBody
+      ? "empty"
+      : isXml
+        ? "xml"
+        : isJson
+          ? "json"
+          : "error_payload";
 
-  if (!response.ok) {
-    throw new Error("PubMed details request failed.");
+    if (!response.ok) {
+      throw Object.assign(new Error("PubMed details request failed."), {
+        stage: "details_fetch" as PubMedSearchFailureStage,
+        detailsStatus: response.status,
+        detailsUrl,
+        detailsBodyPreview: body.slice(0, 500),
+        detailsBodyType: bodyType,
+      });
+    }
+
+    if (!trimmedBody) {
+      continue;
+    }
+
+    const publications = parsePubmedArticles(body);
+    if (pmidChunk.length > 0 && publications.length === 0 && body.includes("<ERROR>")) {
+      throw Object.assign(new Error(`PubMed details parsing failed: ${body.slice(0, 500)}`), {
+        stage: "details_response_parsing" as PubMedSearchFailureStage,
+        detailsStatus: response.status,
+        detailsUrl,
+        detailsBodyPreview: body.slice(0, 500),
+        detailsBodyType: bodyType,
+      });
+    }
+
+    allPublications.push(...publications);
   }
 
-  const xml = await response.text();
-  if (!xml.trim()) {
-    return [];
-  }
-
-  const publications = parsePubmedArticles(xml);
-  if (pmids.length > 0 && publications.length === 0 && xml.includes("<ERROR>")) {
-    throw new Error(`PubMed details parsing failed: ${xml.slice(0, 500)}`);
-  }
-
-  return publications;
+  return allPublications;
 }
 
 function formatErrorDetails(error: unknown): { message: string; stack?: string } {
@@ -741,9 +773,73 @@ export async function searchFacultyPublications(
   for (const faculty of facultyRows) {
     try {
       const idSearchResult = await fetchPubMedIdsForFaculty(faculty, startDate, endDate);
-      const { pmids } = idSearchResult;
-      const publications = await fetchPubMedDetails(pmids);
       const facultyName = `${faculty.first_name} ${faculty.last_name}`.trim();
+      const isAkbarWaljee = facultyName.toLowerCase() === "akbar waljee";
+      const { pmids } = idSearchResult;
+      const sanitizedPmids = [...new Set(pmids.map((pmid) => pmid.trim()).filter(Boolean))];
+      const detailsParams = new URLSearchParams({
+        db: "pubmed",
+        id: sanitizedPmids.slice(0, 50).join(","),
+        retmode: "xml",
+      });
+      const detailsUrlPreview = `https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi?${detailsParams.toString()}`;
+      let publications: ParsedPublication[] = [];
+
+      if (isAkbarWaljee) {
+        console.info(
+          `[pubmed-debug] akbar_trace stage="details_pre_request" endpoint="efetch.fcgi" pmid_count=${pmids.length} pmid_list="${pmids.join(",")}" details_url="${detailsUrlPreview}"`,
+        );
+      }
+
+      if (sanitizedPmids.length === 0) {
+        if (isAkbarWaljee) {
+          console.info(
+            `[pubmed-debug] akbar_trace stage="details_skip_empty_pmids" faculty="${facultyName}" pmid_count=${pmids.length} sanitized_pmid_count=0`,
+          );
+        }
+      } else {
+        try {
+          publications = await fetchPubMedDetails(sanitizedPmids);
+        } catch (error) {
+          const detailsStatus =
+            typeof error === "object" &&
+            error !== null &&
+            "detailsStatus" in error &&
+            typeof (error as { detailsStatus?: number }).detailsStatus === "number"
+              ? (error as { detailsStatus: number }).detailsStatus
+              : -1;
+          const detailsUrl =
+            typeof error === "object" &&
+            error !== null &&
+            "detailsUrl" in error &&
+            typeof (error as { detailsUrl?: string }).detailsUrl === "string"
+              ? (error as { detailsUrl: string }).detailsUrl
+              : detailsUrlPreview;
+          const detailsBodyPreview =
+            typeof error === "object" &&
+            error !== null &&
+            "detailsBodyPreview" in error &&
+            typeof (error as { detailsBodyPreview?: string }).detailsBodyPreview === "string"
+              ? (error as { detailsBodyPreview: string }).detailsBodyPreview
+              : "";
+          const detailsBodyType =
+            typeof error === "object" &&
+            error !== null &&
+            "detailsBodyType" in error &&
+            typeof (error as { detailsBodyType?: string }).detailsBodyType === "string"
+              ? (error as { detailsBodyType: string }).detailsBodyType
+              : "unknown";
+
+          if (isAkbarWaljee) {
+            console.error(
+              `[pubmed-debug] akbar_trace stage="details_failure" faculty="${facultyName}" pmid_count=${pmids.length} pmid_list="${pmids.join(",")}" details_url="${detailsUrl}" http_status=${detailsStatus} response_body_type="${detailsBodyType}" response_preview="${detailsBodyPreview}"`,
+            );
+          }
+
+          throw error;
+        }
+      }
+
       const isTargetFaculty = facultyName.toLowerCase() === PUBMED_DEBUG_TARGET_FACULTY;
       const retrievedPmidsCount = pmids.length;
 
