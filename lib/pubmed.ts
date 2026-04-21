@@ -1,5 +1,6 @@
 import { FacultyRecord } from "@/lib/types/faculty";
 import {
+  FacultySearchError,
   InternationalFlag,
   PublicationConfidence,
   PublicationSearchResult,
@@ -26,6 +27,18 @@ type PubMedIdSearchResult = {
   totalCount: number;
   retmax: number;
   retmaxHit: boolean;
+};
+
+type PubMedSearchFailureStage =
+  | "request_construction"
+  | "fetch"
+  | "response_parsing"
+  | "candidate_extraction"
+  | "unknown";
+
+export type SearchFacultyPublicationsOutcome = {
+  results: PublicationSearchResult[];
+  facultyErrors: FacultySearchError[];
 };
 
 const PUBMED_RETMAX = 200;
@@ -544,42 +557,77 @@ async function fetchPubMedIdsForFaculty(
   startDate?: string,
   endDate?: string,
 ): Promise<PubMedIdSearchResult> {
-  const query = buildPubMedAuthorQuery(faculty, startDate, endDate);
-  const url = buildPubMedEsearchUrl(query);
   const facultyName = `${faculty.first_name} ${faculty.last_name}`.trim();
+  const isAkbarWaljee = facultyName.toLowerCase() === "akbar waljee";
+  let stage: PubMedSearchFailureStage = "request_construction";
 
-  console.info(
-    `[pubmed-debug] request faculty="${facultyName}" raw_query='${query}' encoded_url='${url}'`,
-  );
+  try {
+    const query = buildPubMedAuthorQuery(faculty, startDate, endDate);
+    const url = buildPubMedEsearchUrl(query);
 
-  const response = await fetch(url, {
-    cache: "no-store",
-  });
+    console.info(
+      `[pubmed-debug] request faculty="${facultyName}" raw_query='${query}' encoded_url='${url}'`,
+    );
 
-  if (!response.ok) {
-    const errorBody = await response.text();
-    throw new Error(
-      `PubMed author search failed for ${faculty.last_name} (status=${response.status}): ${errorBody.slice(0, 300)}`,
+    if (isAkbarWaljee) {
+      console.info(
+        `[pubmed-debug] akbar_trace stage="request_construction" faculty="${facultyName}" raw_query='${query}' pubmed_url='${url}'`,
+      );
+    }
+
+    stage = "fetch";
+    const response = await fetch(url, {
+      cache: "no-store",
+    });
+    const responseBody = await response.text();
+
+    if (isAkbarWaljee) {
+      console.info(
+        `[pubmed-debug] akbar_trace stage="fetch" faculty="${facultyName}" http_status=${response.status} response_preview='${responseBody.slice(0, 500)}'`,
+      );
+    }
+
+    if (!response.ok) {
+      throw new Error(
+        `PubMed author search failed for ${faculty.last_name} (status=${response.status}): ${responseBody.slice(0, 500)}`,
+      );
+    }
+
+    stage = "response_parsing";
+    const data = JSON.parse(responseBody) as {
+      esearchresult?: {
+        count?: string;
+        idlist?: string[];
+      };
+    };
+
+    stage = "candidate_extraction";
+    const idlist = data.esearchresult?.idlist;
+    const pmids = Array.isArray(idlist) ? idlist : [];
+    const totalCount = Number(data.esearchresult?.count ?? "0");
+
+    if (isAkbarWaljee) {
+      console.info(
+        `[pubmed-debug] akbar_trace stage="candidate_extraction" faculty="${facultyName}" pmid_count=${pmids.length} total_count_raw='${data.esearchresult?.count ?? ""}'`,
+      );
+    }
+
+    return {
+      query,
+      pmids,
+      totalCount: Number.isNaN(totalCount) ? pmids.length : totalCount,
+      retmax: PUBMED_RETMAX,
+      retmaxHit: pmids.length >= PUBMED_RETMAX,
+    };
+  } catch (error) {
+    const failure = error instanceof Error ? error : new Error(String(error));
+    throw Object.assign(
+      new Error(
+        `PubMed id retrieval failed at stage "${stage}" for faculty "${facultyName}": ${failure.message}`,
+      ),
+      { cause: error, stage },
     );
   }
-
-  const data = (await response.json()) as {
-    esearchresult?: {
-      count?: string;
-      idlist?: string[];
-    };
-  };
-
-  const pmids = data.esearchresult?.idlist ?? [];
-  const totalCount = Number(data.esearchresult?.count ?? "0");
-
-  return {
-    query,
-    pmids,
-    totalCount: Number.isNaN(totalCount) ? pmids.length : totalCount,
-    retmax: PUBMED_RETMAX,
-    retmaxHit: pmids.length >= PUBMED_RETMAX,
-  };
 }
 
 async function fetchPubMedDetails(pmids: string[]): Promise<ParsedPublication[]> {
@@ -605,7 +653,28 @@ async function fetchPubMedDetails(pmids: string[]): Promise<ParsedPublication[]>
   }
 
   const xml = await response.text();
-  return parsePubmedArticles(xml);
+  if (!xml.trim()) {
+    return [];
+  }
+
+  const publications = parsePubmedArticles(xml);
+  if (pmids.length > 0 && publications.length === 0 && xml.includes("<ERROR>")) {
+    throw new Error(`PubMed details parsing failed: ${xml.slice(0, 500)}`);
+  }
+
+  return publications;
+}
+
+function formatErrorDetails(error: unknown): { message: string; stack?: string } {
+  if (error instanceof Error) {
+    return {
+      message: error.message,
+      stack: error.stack,
+    };
+  }
+
+  const message = String(error);
+  return { message };
 }
 
 function matchAuthorName(faculty: FacultyRecord, publication: ParsedPublication): boolean {
@@ -663,8 +732,9 @@ export async function searchFacultyPublications(
   facultyRows: FacultyRecord[],
   startDate?: string,
   endDate?: string,
-): Promise<PublicationSearchResult[]> {
+): Promise<SearchFacultyPublicationsOutcome> {
   const results: PublicationSearchResult[] = [];
+  const facultyErrors: FacultySearchError[] = [];
   const delayBetweenRequestsMs = 200;
   const seenFacultyPmid = new Set<string>();
 
@@ -799,11 +869,29 @@ export async function searchFacultyPublications(
       );
     } catch (error) {
       const facultyName = `${faculty.first_name} ${faculty.last_name}`.trim();
-      console.error(`Publication search failed for faculty "${facultyName}".`, error);
+      const details = formatErrorDetails(error);
+      const stage =
+        typeof error === "object" &&
+        error !== null &&
+        "stage" in error &&
+        typeof (error as { stage?: string }).stage === "string"
+          ? ((error as { stage: PubMedSearchFailureStage }).stage ?? "unknown")
+          : "unknown";
+
+      facultyErrors.push({
+        faculty_name: facultyName,
+        stage,
+        message: details.message,
+        stack: details.stack,
+      });
+
+      console.error(
+        `[pubmed-error] faculty="${facultyName}" stage="${stage}" message="${details.message}" stack="${details.stack ?? "unavailable"}"`,
+      );
     } finally {
       await new Promise((resolve) => setTimeout(resolve, delayBetweenRequestsMs));
     }
   }
 
-  return results;
+  return { results, facultyErrors };
 }

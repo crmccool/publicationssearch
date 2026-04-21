@@ -25,7 +25,7 @@ export async function POST(request: NextRequest) {
       orcid: normalizeOrcid(row.orcid),
     }));
 
-    const results = await searchFacultyPublications(
+    const { results, facultyErrors } = await searchFacultyPublications(
       normalizedActiveFaculty,
       body.startDate,
       body.endDate,
@@ -36,8 +36,10 @@ export async function POST(request: NextRequest) {
       end_date: body.endDate ?? null,
       run_timestamp: new Date().toISOString(),
       faculty_count_searched: normalizedActiveFaculty.length,
+      faculty_count_failed: facultyErrors.length,
       result_count: results.length,
       search_method: "hybrid_pubmed_orcid",
+      faculty_errors: facultyErrors,
       results,
     });
   } catch (error) {
