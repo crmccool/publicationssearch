@@ -8,6 +8,9 @@ import { PublicationSearchRequest } from "@/lib/types/publication-search";
 export async function POST(request: NextRequest) {
   try {
     const body = (await request.json()) as PublicationSearchRequest;
+    console.info(
+      `[pubmed-debug] api_request_received startDate="${body.startDate ?? "undefined"}" endDate="${body.endDate ?? "undefined"}"`,
+    );
 
     const { data: facultyRows, error } = await listFacultyRows();
     if (error) {
