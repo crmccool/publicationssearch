@@ -745,7 +745,7 @@ function buildPubMedAuthorQuery(faculty: FacultyRecord, startDate?: string, endD
 
   const authorClause =
     `("${last} ${first}"[Author] OR "${last} ${firstInitial}"[Author] OR "${last} ${firstInitial}*"[Author])`;
-  const umClause = `"University of Michigan"[Affiliation]`;
+  const umClause = `("University of Michigan"[Affiliation] OR "Michigan Medicine"[Affiliation] OR "University of Michigan Medical School"[Affiliation])`;
   const hasDateRange = sanitizedStartDate.length > 0 && sanitizedEndDate.length > 0;
   const dateClause = hasDateRange
     ? `("${sanitizedStartDate}"[PDAT] : "${sanitizedEndDate}"[PDAT])`
