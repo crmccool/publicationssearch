@@ -90,6 +90,37 @@ export default function ResultsPage() {
     [results],
   );
 
+  const facultyWithInternationalResultsCount = useMemo(() => {
+    const facultyNames = new Set<string>();
+
+    results
+      .filter((result) => result.international_flag === "true")
+      .forEach((result) => {
+        const facultyName = result.faculty_name.trim();
+        if (facultyName.length > 0) {
+          facultyNames.add(facultyName);
+        }
+      });
+
+    return facultyNames.size;
+  }, [results]);
+
+  const uniqueInternationalCountriesCount = useMemo(() => {
+    const countries = new Set<string>();
+
+    results
+      .filter((result) => result.international_flag === "true")
+      .forEach((result) => {
+        result.international_countries
+          .split(";")
+          .map((country) => country.trim())
+          .filter((country) => country.length > 0 && country.toLowerCase() !== "unknown")
+          .forEach((country) => countries.add(country));
+      });
+
+    return countries.size;
+  }, [results]);
+
   return (
     <section className="card">
       <h1 className="text-2xl font-bold text-slate-900">Results</h1>
@@ -109,6 +140,8 @@ export default function ResultsPage() {
             <li>Faculty searched: {runSummary.faculty_count_searched}</li>
             <li>Total results: {runSummary.result_count}</li>
             <li>International results: {internationalResultCount}</li>
+            <li>Faculty with international results: {facultyWithInternationalResultsCount}</li>
+            <li>Unique countries represented: {uniqueInternationalCountriesCount}</li>
             <li>Search method: {runSummary.search_method}</li>
           </ul>
         </div>
