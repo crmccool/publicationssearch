@@ -1,4 +1,5 @@
 import { extractCountriesFromAffiliation, isUnitedStatesCountry } from "@/lib/countries";
+import { classifyLmicCountries } from "@/lib/worldBankIncome";
 import { FacultyRecord } from "@/lib/types/faculty";
 import {
   FacultySearchError,
@@ -1366,6 +1367,12 @@ export async function searchFacultyPublications(
         seenFacultyPmid.add(dedupeKey);
 
         const classification = classifyPublicationAffiliations(publication.allAffiliations);
+        const parsedInternationalCountries = classification.internationalCountries
+          .split(";")
+          .map((country) => country.trim())
+          .filter((country) => country.length > 0);
+        const lmicClassification = classifyLmicCountries(parsedInternationalCountries);
+
         results.push({
           faculty_name: `${faculty.first_name} ${faculty.last_name}`,
           title: publication.title,
@@ -1373,6 +1380,8 @@ export async function searchFacultyPublications(
           PMID: publication.pmid,
           international_flag: classification.internationalFlag,
           international_countries: classification.internationalCountries,
+          has_lmic_country: lmicClassification.has_lmic_country,
+          lmic_countries: lmicClassification.lmic_countries.join("; "),
           confidence: getConfidence(faculty, publication, hasNameMatchRaw),
         });
         finalAcceptedCount += 1;

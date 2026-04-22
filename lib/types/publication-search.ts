@@ -9,6 +9,8 @@ export type PublicationSearchResult = {
   PMID: string;
   international_flag: InternationalFlag;
   international_countries: string;
+  has_lmic_country: boolean;
+  lmic_countries: string;
   confidence: PublicationConfidence;
 };
 
