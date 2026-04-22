@@ -1,3 +1,4 @@
+import { extractCountriesFromAffiliation, isUnitedStatesCountry } from "@/lib/countries";
 import { FacultyRecord } from "@/lib/types/faculty";
 import {
   FacultySearchError,
@@ -659,13 +660,8 @@ function hasUMichAffiliation(affiliations: string[]): boolean {
 function isDomesticAffiliation(affiliation: string): boolean {
   const normalized = affiliation.toLowerCase();
 
-  if (
-    normalized.includes("united states") ||
-    normalized.includes("usa") ||
-    normalized.includes("u.s.") ||
-    normalized.includes("u.s.a") ||
-    normalized.includes("america")
-  ) {
+  const { countries } = extractCountriesFromAffiliation(affiliation);
+  if (countries.some((country) => isUnitedStatesCountry(country))) {
     return true;
   }
 
@@ -675,23 +671,6 @@ function isDomesticAffiliation(affiliation: string): boolean {
     return exactRegex.test(normalized);
   });
 }
-
-function getCountryFromAffiliation(affiliation: string): string | null {
-  const compact = affiliation.replace(/\s+/g, " ").trim();
-  if (!compact) {
-    return null;
-  }
-
-  return (
-    compact
-      .replace(/[.;]\s*$/, "")
-      .split(",")
-      .map((part) => part.trim())
-      .filter(Boolean)
-      .at(-1) ?? null
-  );
-}
-
 function classifyPublicationAffiliations(affiliations: string[]): {
   internationalFlag: InternationalFlag;
   internationalCountries: string;
@@ -706,6 +685,11 @@ function classifyPublicationAffiliations(affiliations: string[]): {
   const internationalCountries = new Set<string>();
   let hasInternational = false;
   let hasUnknownInternational = false;
+  const extractionDebug = {
+    rawCandidateTokens: new Set<string>(),
+    validatedCountries: new Set<string>(),
+    rejectedTokens: new Set<string>(),
+  };
 
   // Evaluate at publication level, not per-author, because PubMed affiliation-to-author
   // linkage can be incomplete/inconsistent for many records.
@@ -719,13 +703,18 @@ function classifyPublicationAffiliations(affiliations: string[]): {
     }
 
     hasInternational = true;
-    const country = getCountryFromAffiliation(affiliation);
-    if (!country || isDomesticAffiliation(country)) {
+    const extraction = extractCountriesFromAffiliation(affiliation);
+    extraction.debug.rawCandidateTokens.forEach((token) => extractionDebug.rawCandidateTokens.add(token));
+    extraction.debug.validatedCountries.forEach((country) => extractionDebug.validatedCountries.add(country));
+    extraction.debug.rejectedTokens.forEach((token) => extractionDebug.rejectedTokens.add(token));
+
+    const nonDomesticCountries = extraction.countries.filter((country) => !isUnitedStatesCountry(country));
+    if (nonDomesticCountries.length === 0) {
       hasUnknownInternational = true;
       continue;
     }
 
-    internationalCountries.add(country);
+    nonDomesticCountries.forEach((country) => internationalCountries.add(country));
   }
 
   if (!hasInternational) {
