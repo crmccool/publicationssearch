@@ -177,6 +177,7 @@ const COUNTRY_REFERENCE_LIST: CountryReferenceEntry[] = [
   { name: "Sweden" },
   { name: "Switzerland" },
   { name: "Syria", aliases: ["Syrian Arab Republic"] },
+  { name: "Taiwan", aliases: ["Republic of China", "Taiwan, ROC"] },
   { name: "Tajikistan" },
   { name: "Tanzania", aliases: ["United Republic of Tanzania"] },
   { name: "Thailand" },
