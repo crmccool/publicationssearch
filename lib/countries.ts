@@ -210,6 +210,7 @@ const COUNTRY_REFERENCE_LIST: CountryReferenceEntry[] = [
   { name: "Zambia" },
   { name: "Zimbabwe" },
 ];
+export const CANONICAL_COUNTRY_NAMES = COUNTRY_REFERENCE_LIST.map((entry) => entry.name);
 
 function normalizeLocationText(value: string): string {
   return value

@@ -209,13 +209,14 @@ export default function ResultsPage() {
               <th className="px-3 py-2 font-semibold text-slate-700">PMID</th>
               <th className="px-3 py-2 font-semibold text-slate-700">international_flag</th>
               <th className="px-3 py-2 font-semibold text-slate-700">international_countries</th>
+              <th className="px-3 py-2 font-semibold text-slate-700">LMIC</th>
               <th className="px-3 py-2 font-semibold text-slate-700">confidence</th>
             </tr>
           </thead>
           <tbody>
             {filteredResults.length === 0 ? (
               <tr>
-                <td className="px-3 py-3 text-slate-500" colSpan={7}>
+                <td className="px-3 py-3 text-slate-500" colSpan={8}>
                   No results yet. Run a publication search to populate this table.
                 </td>
               </tr>
@@ -238,6 +239,9 @@ export default function ResultsPage() {
                   <td className="px-3 py-2 align-top text-slate-700">{result.international_flag}</td>
                   <td className="px-3 py-2 align-top text-slate-700">
                     {result.international_countries}
+                  </td>
+                  <td className="px-3 py-2 align-top text-slate-700">
+                    {result.has_lmic_country ? "Yes" : "No"}
                   </td>
                   <td className="px-3 py-2 align-top text-slate-700">{result.confidence}</td>
                 </tr>
