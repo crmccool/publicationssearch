@@ -345,37 +345,15 @@ function getFirstTextValue(...values: unknown[]): string {
   return "";
 }
 
-function parsePublicationDate(articleNode: Record<string, unknown>): string {
-  const articleDate = asArray<Record<string, unknown>>(
-    articleNode.ArticleDate as Record<string, unknown> | Record<string, unknown>[] | undefined,
-  )[0];
-  if (articleDate) {
-    const articleYear = getTextValue(articleDate.Year);
-    const articleMonth = getTextValue(articleDate.Month);
-    const articleDay = getTextValue(articleDate.Day);
+type PublicationDateCandidate = {
+  value: string;
+  source: string;
+};
 
-    if (articleYear && articleMonth && articleDay) {
-      return `${articleYear}-${articleMonth}-${articleDay}`;
-    }
-    if (articleYear && articleMonth) {
-      return `${articleYear}-${articleMonth}`;
-    }
-    if (articleYear) {
-      return articleYear;
-    }
-  }
-
-  const pubDate = (articleNode.Journal as Record<string, unknown> | undefined)?.JournalIssue as
-    | Record<string, unknown>
-    | undefined;
-  const pubDateNode = pubDate?.PubDate as Record<string, unknown> | undefined;
-  if (!pubDateNode) {
-    return "Unknown";
-  }
-
-  const year = getTextValue(pubDateNode.Year);
-  const month = getTextValue(pubDateNode.Month);
-  const day = getTextValue(pubDateNode.Day);
+function getDateValueFromNode(node: Record<string, unknown>): string {
+  const year = getTextValue(node.Year);
+  const month = getTextValue(node.Month);
+  const day = getTextValue(node.Day);
 
   if (year && month && day) {
     return `${year}-${month}-${day}`;
@@ -387,7 +365,69 @@ function parsePublicationDate(articleNode: Record<string, unknown>): string {
     return year;
   }
 
-  return getTextValue(pubDateNode.MedlineDate) || "Unknown";
+  return getTextValue(node.MedlineDate);
+}
+
+function parsePublicationDate(pubmedArticleNode: Record<string, unknown>): string {
+  const medlineCitation = pubmedArticleNode.MedlineCitation as Record<string, unknown> | undefined;
+  const articleNode = medlineCitation?.Article as Record<string, unknown> | undefined;
+  const pubmedData = pubmedArticleNode.PubmedData as Record<string, unknown> | undefined;
+  const candidates: PublicationDateCandidate[] = [];
+
+  const articleDates = asArray<Record<string, unknown>>(
+    articleNode?.ArticleDate as Record<string, unknown> | Record<string, unknown>[] | undefined,
+  );
+  for (const articleDate of articleDates) {
+    const value = getDateValueFromNode(articleDate);
+    if (value) {
+      candidates.push({ value, source: "ArticleDate" });
+    }
+  }
+
+  const pubDateNode = (
+    (articleNode?.Journal as Record<string, unknown> | undefined)?.JournalIssue as
+      | Record<string, unknown>
+      | undefined
+  )?.PubDate as Record<string, unknown> | undefined;
+  if (pubDateNode) {
+    const value = getDateValueFromNode(pubDateNode);
+    if (value) {
+      candidates.push({ value, source: "JournalIssue.PubDate" });
+    }
+  }
+
+  const historyDates = asArray<Record<string, unknown>>(
+    ((pubmedData?.History as Record<string, unknown> | undefined)?.PubMedPubDate as
+      | Record<string, unknown>
+      | Record<string, unknown>[]
+      | undefined) ?? undefined,
+  );
+  for (const historyDate of historyDates) {
+    const pubStatus = getTextValue(historyDate.PubStatus).toLowerCase();
+    if (pubStatus && !["aheadofprint", "epublish", "ppublish", "ecollection"].includes(pubStatus)) {
+      continue;
+    }
+    const value = getDateValueFromNode(historyDate);
+    if (value) {
+      candidates.push({ value, source: `History.PubMedPubDate:${pubStatus || "unknown"}` });
+    }
+  }
+
+  const parseableCandidates = candidates
+    .map((candidate) => ({
+      ...candidate,
+      parsedDate: parseDateForRange(candidate.value),
+    }))
+    .filter((candidate) => Boolean(candidate.parsedDate));
+
+  if (parseableCandidates.length > 0) {
+    parseableCandidates.sort(
+      (a, b) => (a.parsedDate as Date).getTime() - (b.parsedDate as Date).getTime(),
+    );
+    return parseableCandidates[0]?.value ?? "Unknown";
+  }
+
+  return candidates[0]?.value || "Unknown";
 }
 
 function parseAuthors(pubmedArticleNode: Record<string, unknown>): ParsedAuthor[] {
@@ -439,7 +479,7 @@ function parsePubmedArticles(xml: string): ParsedPublication[] {
 
       const title = getFirstTextValue(article?.ArticleTitle);
       const journal = getFirstTextValue(article?.Journal && (article.Journal as Record<string, unknown>).Title);
-      const publicationDate = parsePublicationDate(article ?? {});
+      const publicationDate = parsePublicationDate(pubmedArticleNode);
 
       const authorNodes = asArray(
         (article?.AuthorList as Record<string, unknown> | undefined)?.Author as
