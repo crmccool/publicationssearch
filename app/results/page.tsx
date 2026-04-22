@@ -65,6 +65,11 @@ export default function ResultsPage() {
     [results, internationalFilter, confidenceFilter],
   );
 
+  const internationalResultCount = useMemo(
+    () => results.filter((result) => result.international_flag === "true").length,
+    [results],
+  );
+
   return (
     <section className="card">
       <h1 className="text-2xl font-bold text-slate-900">Results</h1>
@@ -83,6 +88,7 @@ export default function ResultsPage() {
             <li>Run time: {formatRunTimestamp(runSummary.run_timestamp)}</li>
             <li>Faculty searched: {runSummary.faculty_count_searched}</li>
             <li>Total results: {runSummary.result_count}</li>
+            <li>International results: {internationalResultCount}</li>
             <li>Search method: {runSummary.search_method}</li>
           </ul>
         </div>
