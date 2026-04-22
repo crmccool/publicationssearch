@@ -62,7 +62,7 @@ const PUBMED_429_MAX_RETRIES = 2;
 const PUBMED_429_BASE_BACKOFF_MS = 2500;
 const PUBMED_EFETCH_BATCH_SIZE = 5;
 const PUBMED_RUN_SOFT_CAP_MS = 45_000;
-const PUBMED_FORENSIC_TARGET_PMID = "41924702";
+const PUBMED_FORENSIC_TARGET_PMID = "41921652";
 const PUBMED_DEBUG_SINGLE_FACULTY = process.env.PUBMED_DEBUG_SINGLE_FACULTY?.trim().toLowerCase() ?? "";
 
 type PubMedRequestType = "esearch" | "efetch";
@@ -349,7 +349,11 @@ function getFirstTextValue(...values: unknown[]): string {
 type PublicationDateCandidate = {
   value: string;
   source: string;
+  path: string;
+  pubStatus?: string;
 };
+
+const PUBLICATION_PUBSTATUSES = new Set(["aheadofprint", "epublish", "ppublish", "ecollection"]);
 
 function getDateValueFromNode(node: Record<string, unknown>): string {
   const year = getTextValue(node.Year);
@@ -369,7 +373,11 @@ function getDateValueFromNode(node: Record<string, unknown>): string {
   return getTextValue(node.MedlineDate);
 }
 
-function parsePublicationDate(pubmedArticleNode: Record<string, unknown>): string {
+function getPubStatusFromNode(node: Record<string, unknown>): string {
+  return getFirstTextValue(node.PubStatus, node["@_PubStatus"], node["@_Pubstatus"]).toLowerCase();
+}
+
+function parsePublicationDate(pubmedArticleNode: Record<string, unknown>, pmid?: string): string {
   const medlineCitation = pubmedArticleNode.MedlineCitation as Record<string, unknown> | undefined;
   const articleNode = medlineCitation?.Article as Record<string, unknown> | undefined;
   const pubmedData = pubmedArticleNode.PubmedData as Record<string, unknown> | undefined;
@@ -381,7 +389,7 @@ function parsePublicationDate(pubmedArticleNode: Record<string, unknown>): strin
   for (const articleDate of articleDates) {
     const value = getDateValueFromNode(articleDate);
     if (value) {
-      candidates.push({ value, source: "ArticleDate" });
+      candidates.push({ value, source: "ArticleDate", path: "MedlineCitation.Article.ArticleDate" });
     }
   }
 
@@ -393,7 +401,11 @@ function parsePublicationDate(pubmedArticleNode: Record<string, unknown>): strin
   if (pubDateNode) {
     const value = getDateValueFromNode(pubDateNode);
     if (value) {
-      candidates.push({ value, source: "JournalIssue.PubDate" });
+      candidates.push({
+        value,
+        source: "JournalIssue.PubDate",
+        path: "MedlineCitation.Article.Journal.JournalIssue.PubDate",
+      });
     }
   }
 
@@ -404,13 +416,18 @@ function parsePublicationDate(pubmedArticleNode: Record<string, unknown>): strin
       | undefined) ?? undefined,
   );
   for (const historyDate of historyDates) {
-    const pubStatus = getTextValue(historyDate.PubStatus).toLowerCase();
-    if (pubStatus && !["aheadofprint", "epublish", "ppublish", "ecollection"].includes(pubStatus)) {
+    const pubStatus = getPubStatusFromNode(historyDate);
+    if (!pubStatus || !PUBLICATION_PUBSTATUSES.has(pubStatus)) {
       continue;
     }
     const value = getDateValueFromNode(historyDate);
     if (value) {
-      candidates.push({ value, source: `History.PubMedPubDate:${pubStatus || "unknown"}` });
+      candidates.push({
+        value,
+        source: `PubMedPubDate:${pubStatus}`,
+        path: "PubmedData.History.PubMedPubDate",
+        pubStatus,
+      });
     }
   }
 
@@ -425,7 +442,36 @@ function parsePublicationDate(pubmedArticleNode: Record<string, unknown>): strin
     parseableCandidates.sort(
       (a, b) => (a.parsedDate as Date).getTime() - (b.parsedDate as Date).getTime(),
     );
+
+    if (pmid === PUBMED_FORENSIC_TARGET_PMID) {
+      const forensicCandidateSummary = parseableCandidates
+        .map(
+          (candidate) =>
+            `${candidate.value}|${candidate.source}|${candidate.path}${
+              candidate.pubStatus ? `|status=${candidate.pubStatus}` : ""
+            }`,
+        )
+        .join(";");
+      console.log(
+        `[pubmed-forensic-date] pmid="${pmid}" candidates="${forensicCandidateSummary}" selected="${parseableCandidates[0]?.value ?? "Unknown"}"`,
+      );
+    }
+
     return parseableCandidates[0]?.value ?? "Unknown";
+  }
+
+  if (pmid === PUBMED_FORENSIC_TARGET_PMID) {
+    const forensicCandidateSummary = candidates
+      .map(
+        (candidate) =>
+          `${candidate.value}|${candidate.source}|${candidate.path}${
+            candidate.pubStatus ? `|status=${candidate.pubStatus}` : ""
+          }`,
+      )
+      .join(";");
+    console.log(
+      `[pubmed-forensic-date] pmid="${pmid}" candidates="${forensicCandidateSummary}" selected="${candidates[0]?.value ?? "Unknown"}" parseable_candidates=0`,
+    );
   }
 
   return candidates[0]?.value || "Unknown";
@@ -480,7 +526,7 @@ function parsePubmedArticles(xml: string): ParsedPublication[] {
 
       const title = getFirstTextValue(article?.ArticleTitle);
       const journal = getFirstTextValue(article?.Journal && (article.Journal as Record<string, unknown>).Title);
-      const publicationDate = parsePublicationDate(pubmedArticleNode);
+      const publicationDate = parsePublicationDate(pubmedArticleNode, pmid);
 
       const authorNodes = asArray(
         (article?.AuthorList as Record<string, unknown> | undefined)?.Author as
