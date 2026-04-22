@@ -16,6 +16,7 @@ export default function ResultsPage() {
   const [runSummary, setRunSummary] = useState<PublicationSearchRunSummary | null>(null);
   const [internationalFilter, setInternationalFilter] = useState<"all" | InternationalFlag>("true");
   const [confidenceFilter, setConfidenceFilter] = useState<"all" | PublicationConfidence>("all");
+  const [countryFilter, setCountryFilter] = useState("all");
 
   useEffect(() => {
     const raw = sessionStorage.getItem(RESULTS_STORAGE_KEY);
@@ -59,11 +60,30 @@ export default function ResultsPage() {
           internationalFilter === "all" || result.international_flag === internationalFilter;
         const confidenceMatches =
           confidenceFilter === "all" || result.confidence === confidenceFilter;
+        const countries = result.international_countries
+          .split(";")
+          .map((country) => country.trim())
+          .filter((country) => country.length > 0);
+        const countryMatches = countryFilter === "all" || countries.includes(countryFilter);
 
-        return internationalMatches && confidenceMatches;
+        return internationalMatches && confidenceMatches && countryMatches;
       }),
-    [results, internationalFilter, confidenceFilter],
+    [results, internationalFilter, confidenceFilter, countryFilter],
   );
+
+  const countryOptions = useMemo(() => {
+    const countries = new Set<string>();
+
+    results.forEach((result) => {
+      result.international_countries
+        .split(";")
+        .map((country) => country.trim())
+        .filter((country) => country.length > 0)
+        .forEach((country) => countries.add(country));
+    });
+
+    return [...countries].sort((a, b) => a.localeCompare(b));
+  }, [results]);
 
   const internationalResultCount = useMemo(
     () => results.filter((result) => result.international_flag === "true").length,
@@ -94,7 +114,7 @@ export default function ResultsPage() {
         </div>
       ) : null}
 
-      <div className="mt-5 grid gap-4 md:grid-cols-2">
+      <div className="mt-5 grid gap-4 md:grid-cols-3">
         <label className="text-sm text-slate-700">
           Filter by international_flag
           <select
@@ -122,6 +142,22 @@ export default function ResultsPage() {
             <option value="high">high</option>
             <option value="medium">medium</option>
             <option value="high_orcid">high_orcid</option>
+          </select>
+        </label>
+
+        <label className="text-sm text-slate-700">
+          Filter by country
+          <select
+            value={countryFilter}
+            onChange={(event) => setCountryFilter(event.target.value)}
+            className="mt-2 block w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
+          >
+            <option value="all">All countries</option>
+            {countryOptions.map((country) => (
+              <option key={country} value={country}>
+                {country}
+              </option>
+            ))}
           </select>
         </label>
       </div>
