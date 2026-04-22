@@ -177,147 +177,296 @@ const US_STATE_TERMS = [
   "wy",
 ];
 
+type XmlNode = {
+  name: string;
+  attributes: Record<string, string>;
+  children: XmlNode[];
+  text: string;
+};
+
+function normalizeXmlTagName(tagName: string): string {
+  return tagName.includes(":") ? (tagName.split(":").at(-1) ?? tagName) : tagName;
+}
+
 function decodeXmlEntities(value: string): string {
   return value
     .replace(/&lt;/g, "<")
     .replace(/&gt;/g, ">")
     .replace(/&amp;/g, "&")
     .replace(/&quot;/g, '"')
-    .replace(/&#39;/g, "'")
-    .trim();
+    .replace(/&#39;/g, "'");
 }
 
-function stripXmlTags(value: string): string {
-  return decodeXmlEntities(value.replace(/<[^>]+>/g, " ").replace(/\s+/g, " "));
+function parseXmlAttributes(raw: string): Record<string, string> {
+  const attributes: Record<string, string> = {};
+  const attributePattern = /([^\s=]+)\s*=\s*("([^"]*)"|'([^']*)')/g;
+  let attributeMatch = attributePattern.exec(raw);
+  while (attributeMatch) {
+    const rawName = attributeMatch[1] ?? "";
+    const normalizedName = normalizeXmlTagName(rawName);
+    const rawValue = attributeMatch[3] ?? attributeMatch[4] ?? "";
+    attributes[normalizedName] = decodeXmlEntities(rawValue);
+    attributeMatch = attributePattern.exec(raw);
+  }
+  return attributes;
 }
 
-function getTagValue(block: string, tagName: string): string {
-  const match = block.match(new RegExp(`<${tagName}(?: [^>]*)?>([\\s\\S]*?)<\\/${tagName}>`));
-  return match ? stripXmlTags(match[1]) : "";
-}
+function parseXmlToNodeTree(xml: string): XmlNode {
+  const root: XmlNode = { name: "__root__", attributes: {}, children: [], text: "" };
+  const stack: XmlNode[] = [root];
+  const tokenPattern = /<!\[CDATA\[[\s\S]*?\]\]>|<!--[\s\S]*?-->|<[^>]+>|[^<]+/g;
+  let match = tokenPattern.exec(xml);
 
-function getAllTagValues(block: string, tagName: string): string[] {
-  const regex = new RegExp(`<${tagName}(?: [^>]*)?>([\\s\\S]*?)<\\/${tagName}>`, "g");
-  const values: string[] = [];
-
-  let match = regex.exec(block);
   while (match) {
-    const value = stripXmlTags(match[1]);
-    if (value) {
-      values.push(value);
+    const token = match[0];
+    const currentNode = stack.at(-1);
+
+    if (!currentNode) {
+      throw new Error("Malformed XML: missing parent node.");
     }
-    match = regex.exec(block);
+
+    if (token.startsWith("<?") || token.startsWith("<!DOCTYPE")) {
+      match = tokenPattern.exec(xml);
+      continue;
+    }
+
+    if (token.startsWith("<!--")) {
+      match = tokenPattern.exec(xml);
+      continue;
+    }
+
+    if (token.startsWith("<![CDATA[")) {
+      const cdata = token.slice(9, -3);
+      currentNode.text += cdata;
+      match = tokenPattern.exec(xml);
+      continue;
+    }
+
+    if (token.startsWith("</")) {
+      const closeTag = normalizeXmlTagName(token.slice(2, -1).trim());
+      const openNode = stack.pop();
+      if (!openNode || openNode.name !== closeTag) {
+        throw new Error(`Malformed XML: mismatched closing tag ${closeTag}.`);
+      }
+      match = tokenPattern.exec(xml);
+      continue;
+    }
+
+    if (token.startsWith("<")) {
+      const selfClosing = token.endsWith("/>");
+      const inner = token.slice(1, selfClosing ? -2 : -1).trim();
+      const firstSpace = inner.search(/\s/);
+      const rawTagName = firstSpace === -1 ? inner : inner.slice(0, firstSpace);
+      const rawAttributes = firstSpace === -1 ? "" : inner.slice(firstSpace + 1);
+      const node: XmlNode = {
+        name: normalizeXmlTagName(rawTagName),
+        attributes: parseXmlAttributes(rawAttributes),
+        children: [],
+        text: "",
+      };
+      currentNode.children.push(node);
+      if (!selfClosing) {
+        stack.push(node);
+      }
+      match = tokenPattern.exec(xml);
+      continue;
+    }
+
+    currentNode.text += decodeXmlEntities(token);
+    match = tokenPattern.exec(xml);
   }
 
-  return values;
+  if (stack.length !== 1) {
+    throw new Error("Malformed XML: unclosed tags detected.");
+  }
+
+  return root;
 }
 
-function parsePublicationDate(articleBlock: string): string {
-  const articleDateBlockMatch = articleBlock.match(/<ArticleDate(?: [^>]*)?>([\s\S]*?)<\/ArticleDate>/);
-  if (articleDateBlockMatch) {
-    const articleDateBlock = articleDateBlockMatch[1];
-    const articleYear = getTagValue(articleDateBlock, "Year");
-    const articleMonth = getTagValue(articleDateBlock, "Month");
-    const articleDay = getTagValue(articleDateBlock, "Day");
+function toJsObject(node: XmlNode): Record<string, unknown> {
+  const groupedChildren = new Map<string, unknown[]>();
+  for (const child of node.children) {
+    const childObject = toJsObject(child);
+    const values = groupedChildren.get(child.name) ?? [];
+    values.push(childObject);
+    groupedChildren.set(child.name, values);
+  }
+
+  const result: Record<string, unknown> = {};
+  for (const [attributeName, attributeValue] of Object.entries(node.attributes)) {
+    result[`@_${attributeName}`] = attributeValue;
+  }
+
+  for (const [childName, childValues] of groupedChildren.entries()) {
+    result[childName] = childValues.length === 1 ? childValues[0] : childValues;
+  }
+
+  const trimmedText = node.text.trim();
+  if (trimmedText) {
+    if (Object.keys(result).length === 0) {
+      return { "#text": trimmedText };
+    }
+    result["#text"] = trimmedText;
+  }
+
+  return result;
+}
+
+function parseXmlToJsObject(xml: string): Record<string, unknown> {
+  const nodeTree = parseXmlToNodeTree(xml);
+  return toJsObject(nodeTree);
+}
+
+function asArray<T>(value: T | T[] | undefined | null): T[] {
+  if (value === undefined || value === null) {
+    return [];
+  }
+  return Array.isArray(value) ? value : [value];
+}
+
+function getTextValue(value: unknown): string {
+  if (typeof value === "string" || typeof value === "number") {
+    return String(value).trim();
+  }
+  if (value && typeof value === "object" && "#text" in value) {
+    const textValue = (value as { "#text"?: unknown })["#text"];
+    if (typeof textValue === "string" || typeof textValue === "number") {
+      return String(textValue).trim();
+    }
+  }
+  return "";
+}
+
+function getFirstTextValue(...values: unknown[]): string {
+  for (const value of values) {
+    const text = getTextValue(value);
+    if (text) {
+      return text;
+    }
+  }
+  return "";
+}
+
+function parsePublicationDate(articleNode: Record<string, unknown>): string {
+  const articleDate = asArray<Record<string, unknown>>(
+    articleNode.ArticleDate as Record<string, unknown> | Record<string, unknown>[] | undefined,
+  )[0];
+  if (articleDate) {
+    const articleYear = getTextValue(articleDate.Year);
+    const articleMonth = getTextValue(articleDate.Month);
+    const articleDay = getTextValue(articleDate.Day);
 
     if (articleYear && articleMonth && articleDay) {
       return `${articleYear}-${articleMonth}-${articleDay}`;
     }
-
     if (articleYear && articleMonth) {
       return `${articleYear}-${articleMonth}`;
     }
-
     if (articleYear) {
       return articleYear;
     }
   }
 
-  const pubDateBlockMatch = articleBlock.match(/<PubDate>([\s\S]*?)<\/PubDate>/);
-  if (!pubDateBlockMatch) {
+  const pubDate = (articleNode.Journal as Record<string, unknown> | undefined)?.JournalIssue as
+    | Record<string, unknown>
+    | undefined;
+  const pubDateNode = pubDate?.PubDate as Record<string, unknown> | undefined;
+  if (!pubDateNode) {
     return "Unknown";
   }
 
-  const pubDateBlock = pubDateBlockMatch[1];
-  const year = getTagValue(pubDateBlock, "Year");
-  const month = getTagValue(pubDateBlock, "Month");
-  const day = getTagValue(pubDateBlock, "Day");
+  const year = getTextValue(pubDateNode.Year);
+  const month = getTextValue(pubDateNode.Month);
+  const day = getTextValue(pubDateNode.Day);
 
   if (year && month && day) {
     return `${year}-${month}-${day}`;
   }
-
   if (year && month) {
     return `${year}-${month}`;
   }
-
   if (year) {
     return year;
   }
 
-  const medlineDate = getTagValue(pubDateBlock, "MedlineDate");
-  return medlineDate || "Unknown";
+  return getTextValue(pubDateNode.MedlineDate) || "Unknown";
 }
 
-function parseAuthors(articleBlock: string): ParsedAuthor[] {
-  const authorRegex = /<Author(?: [^>]*)?>([\s\S]*?)<\/Author>/g;
-  const authors: ParsedAuthor[] = [];
+function parseAuthors(pubmedArticleNode: Record<string, unknown>): ParsedAuthor[] {
+  const authorListNode = (
+    ((pubmedArticleNode.MedlineCitation as Record<string, unknown> | undefined)?.Article as
+      | Record<string, unknown>
+      | undefined)?.AuthorList as Record<string, unknown> | undefined
+  )?.Author;
 
-  let match = authorRegex.exec(articleBlock);
-  while (match) {
-    const authorBlock = match[1];
-    const lastName = getTagValue(authorBlock, "LastName");
-    const foreName = getTagValue(authorBlock, "ForeName");
-    const initials = getTagValue(authorBlock, "Initials");
-    const identifierValues = getAllTagValues(authorBlock, "Identifier").map((value) =>
-      value.toLowerCase(),
-    );
+  return asArray(authorListNode)
+    .map((authorNode) => {
+      const author = (authorNode ?? {}) as Record<string, unknown>;
+      const lastName = getTextValue(author.LastName);
+      const foreName = getTextValue(author.ForeName);
+      const initials = getTextValue(author.Initials);
+      const identifierValues = asArray(author.Identifier)
+        .map((identifier) => getTextValue(identifier).toLowerCase())
+        .filter(Boolean);
 
-    if (lastName) {
-      authors.push({
+      if (!lastName) {
+        return null;
+      }
+
+      return {
         lastName,
         foreName,
         initials,
         identifierValues,
-      });
-    }
-
-    match = authorRegex.exec(articleBlock);
-  }
-
-  return authors;
+      };
+    })
+    .filter((author): author is ParsedAuthor => Boolean(author));
 }
 
 function parsePubmedArticles(xml: string): ParsedPublication[] {
-  const publications: ParsedPublication[] = [];
-  const articleRegex = /<PubmedArticle(?:\s[^>]*)?>([\s\S]*?)<\/PubmedArticle>/g;
+  const parsedRoot = parseXmlToJsObject(xml);
+  const articleSet = parsedRoot.PubmedArticleSet as Record<string, unknown> | undefined;
+  const articleNodes = asArray<Record<string, unknown>>(
+    articleSet?.PubmedArticle as Record<string, unknown> | Record<string, unknown>[] | undefined,
+  );
 
-  let match = articleRegex.exec(xml);
-  while (match) {
-    const articleBlock = match[1];
+  return articleNodes
+    .map((pubmedArticleNode) => {
+      const medlineCitation = pubmedArticleNode.MedlineCitation as Record<string, unknown> | undefined;
+      const article = medlineCitation?.Article as Record<string, unknown> | undefined;
+      const pmid = getFirstTextValue(medlineCitation?.PMID, pubmedArticleNode.PMID);
+      if (!pmid) {
+        return null;
+      }
 
-    const pmid = getTagValue(articleBlock, "PMID");
-    const title = getTagValue(articleBlock, "ArticleTitle");
-    const journal = getTagValue(articleBlock, "Title");
-    const publicationDate = parsePublicationDate(articleBlock);
-    const allAffiliations = getAllTagValues(articleBlock, "Affiliation");
-    const authors = parseAuthors(articleBlock);
+      const title = getFirstTextValue(article?.ArticleTitle);
+      const journal = getFirstTextValue(article?.Journal && (article.Journal as Record<string, unknown>).Title);
+      const publicationDate = parsePublicationDate(article ?? {});
 
-    if (pmid) {
-      publications.push({
+      const authorNodes = asArray(
+        (article?.AuthorList as Record<string, unknown> | undefined)?.Author as
+          | Record<string, unknown>
+          | Record<string, unknown>[]
+          | undefined,
+      );
+      const allAffiliations = authorNodes.flatMap((authorNode) =>
+        asArray((authorNode.AffiliationInfo as Record<string, unknown> | undefined)?.Affiliation)
+          .map((affiliationNode) => getTextValue(affiliationNode))
+          .filter(Boolean),
+      );
+
+      const authors = parseAuthors(pubmedArticleNode);
+
+      return {
         pmid,
         title: title || "Untitled",
         journal: journal || "Unknown",
         publicationDate,
         allAffiliations,
         authors,
-      });
-    }
-
-    match = articleRegex.exec(xml);
-  }
-
-  return publications;
+      };
+    })
+    .filter((publication): publication is ParsedPublication => Boolean(publication));
 }
 
 function parseDateForRange(value: string): Date | null {
@@ -778,11 +927,15 @@ async function fetchPubMedDetailsBatch(
   }
 
   const publications = parsePubmedArticles(body);
-  const rawPubmedArticleCount = (body.match(/<PubmedArticle(?:\s[^>]*)?>/g) ?? []).length;
   const parsedPmids = publications.map((publication) => publication.pmid);
+  console.log("[pubmed-debug] parsed_article_count=", publications.length);
+  console.log("[pubmed-debug] parsed_pmids=", parsedPmids.slice(0, 10));
+  if (pmids.includes(PUBMED_FORENSIC_TARGET_PMID)) {
+    console.log("[pubmed-debug] forensic_target_present_in_parsed=true");
+  }
   const forensicTargetPresent = parsedPmids.includes(PUBMED_FORENSIC_TARGET_PMID);
   console.info(
-    `[pubmed-debug] efetch_parse_summary faculty="${facultyName}" requested_pmids="${pmids.join(",")}" raw_pubmed_article_count=${rawPubmedArticleCount} parsed_publication_count=${publications.length} parsed_pmids="${parsedPmids.join(",")}" forensic_target_present=${forensicTargetPresent}`,
+    `[pubmed-debug] efetch_parse_summary faculty="${facultyName}" requested_pmids="${pmids.join(",")}" parsed_publication_count=${publications.length} parsed_pmids="${parsedPmids.join(",")}" forensic_target_present=${forensicTargetPresent}`,
   );
 
   if (publications.length === 0 && body.includes("<ERROR>")) {
