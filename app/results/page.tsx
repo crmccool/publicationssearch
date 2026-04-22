@@ -14,7 +14,7 @@ import {
 export default function ResultsPage() {
   const [results, setResults] = useState<PublicationSearchResult[]>([]);
   const [runSummary, setRunSummary] = useState<PublicationSearchRunSummary | null>(null);
-  const [internationalFilter, setInternationalFilter] = useState<"all" | InternationalFlag>("all");
+  const [internationalFilter, setInternationalFilter] = useState<"all" | InternationalFlag>("true");
   const [confidenceFilter, setConfidenceFilter] = useState<"all" | PublicationConfidence>("all");
 
   useEffect(() => {
