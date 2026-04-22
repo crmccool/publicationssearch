@@ -5,13 +5,15 @@ export type WorldBankIncomeGroup =
   | "Lower middle income"
   | "Upper middle income"
   | "High income"
-  | "Not classified";
+  | "Not classified"
+  | "Unknown";
 
 export type WorldBankIncomeEntry = {
   canonical_country_name: string;
   world_bank_economy_name: string;
   income_group: WorldBankIncomeGroup;
   is_lmic: boolean;
+  mapped: boolean;
 };
 
 const LOW_INCOME_ECONOMIES = new Set([
@@ -187,6 +189,7 @@ const HIGH_INCOME_ECONOMIES = new Set([
   "Greenland",
   "Guam",
   "Guyana",
+  "Holy See",
   "Hong Kong SAR, China",
   "Hungary",
   "Iceland",
@@ -241,6 +244,8 @@ const HIGH_INCOME_ECONOMIES = new Set([
   "Virgin Islands (U.S.)",
 ]);
 
+const NOT_CLASSIFIED_ECONOMIES = new Set(["Ethiopia", "Venezuela, RB"]);
+
 const WB_NAME_OVERRIDES: Record<string, string> = {
   Bahamas: "Bahamas, The",
   Brunei: "Brunei Darussalam",
@@ -265,12 +270,15 @@ const WB_NAME_OVERRIDES: Record<string, string> = {
   Syria: "Syrian Arab Republic",
   Taiwan: "Taiwan, China",
   Turkey: "Türkiye",
+  "Vatican City": "Holy See",
   Venezuela: "Venezuela, RB",
   Vietnam: "Viet Nam",
   Yemen: "Yemen, Rep.",
 };
 
-function getIncomeGroupByWorldBankName(worldBankEconomyName: string): WorldBankIncomeGroup {
+const loggedUnmappedCanonicalCountries = new Set<string>();
+
+function getIncomeGroupByWorldBankName(worldBankEconomyName: string): WorldBankIncomeGroup | null {
   if (LOW_INCOME_ECONOMIES.has(worldBankEconomyName)) {
     return "Low income";
   }
@@ -287,11 +295,11 @@ function getIncomeGroupByWorldBankName(worldBankEconomyName: string): WorldBankI
     return "High income";
   }
 
-  if (worldBankEconomyName === "Ethiopia" || worldBankEconomyName === "Venezuela, RB") {
+  if (NOT_CLASSIFIED_ECONOMIES.has(worldBankEconomyName)) {
     return "Not classified";
   }
 
-  throw new Error(`No World Bank FY26 income-group mapping found for economy \"${worldBankEconomyName}\".`);
+  return null;
 }
 
 function isLmicIncomeGroup(incomeGroup: WorldBankIncomeGroup): boolean {
@@ -302,16 +310,41 @@ function isLmicIncomeGroup(incomeGroup: WorldBankIncomeGroup): boolean {
   );
 }
 
+function toUnknownIncomeEntry(
+  canonicalCountryName: string,
+  worldBankEconomyName: string,
+): WorldBankIncomeEntry {
+  if (!loggedUnmappedCanonicalCountries.has(canonicalCountryName)) {
+    loggedUnmappedCanonicalCountries.add(canonicalCountryName);
+    console.warn(
+      `[world-bank-income] unmapped canonical country \"${canonicalCountryName}\" (world bank name \"${worldBankEconomyName}\"). Falling back to income_group=\"Unknown\" and is_lmic=false.`,
+    );
+  }
+
+  return {
+    canonical_country_name: canonicalCountryName,
+    world_bank_economy_name: worldBankEconomyName,
+    income_group: "Unknown",
+    is_lmic: false,
+    mapped: false,
+  };
+}
+
 const WORLD_BANK_INCOME_REFERENCE_LIST: WorldBankIncomeEntry[] = CANONICAL_COUNTRY_NAMES.map(
   (canonicalCountryName) => {
     const worldBankEconomyName = WB_NAME_OVERRIDES[canonicalCountryName] ?? canonicalCountryName;
     const incomeGroup = getIncomeGroupByWorldBankName(worldBankEconomyName);
+
+    if (!incomeGroup) {
+      return toUnknownIncomeEntry(canonicalCountryName, worldBankEconomyName);
+    }
 
     return {
       canonical_country_name: canonicalCountryName,
       world_bank_economy_name: worldBankEconomyName,
       income_group: incomeGroup,
       is_lmic: isLmicIncomeGroup(incomeGroup),
+      mapped: true,
     };
   },
 );
@@ -324,6 +357,12 @@ export function getWorldBankIncomeEntryByCanonicalCountry(
   canonicalCountryName: string,
 ): WorldBankIncomeEntry | null {
   return WORLD_BANK_INCOME_BY_COUNTRY.get(canonicalCountryName) ?? null;
+}
+
+export function getUnmappedCanonicalCountries(): string[] {
+  return WORLD_BANK_INCOME_REFERENCE_LIST.filter((entry) => !entry.mapped)
+    .map((entry) => entry.canonical_country_name)
+    .sort((a, b) => a.localeCompare(b));
 }
 
 export function classifyLmicCountries(countries: string[]): {
