@@ -63,6 +63,7 @@ const RESULTS_CSV_COLUMNS = [
   "title",
   "publication_date",
   "pmid",
+  "pubmed_url",
   "international_flag",
   "international_countries",
   "lmic",
@@ -327,12 +328,17 @@ function buildFilename(prefix: string, runSummary: ExportRunSummary | null): str
   return `${prefix}_${startDate}_to_${endDate}_${timestampForFilename()}.csv`;
 }
 
+function buildPubMedUrl(pmid: string): string {
+  return pmid ? `https://pubmed.ncbi.nlm.nih.gov/${pmid}/` : "";
+}
+
 function resultToCsvRow(result: ExportPublicationResult): CsvRow {
   return {
     faculty: result.faculty_name,
     title: result.title,
     publication_date: result.publication_date,
     pmid: result.PMID,
+    pubmed_url: buildPubMedUrl(result.PMID),
     international_flag: result.international_flag,
     international_countries: result.international_countries,
     lmic:
