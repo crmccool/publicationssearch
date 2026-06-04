@@ -8,6 +8,7 @@ import {
   PublicationConfidence,
   PublicationSearchAudit,
   PublicationSearchMethod,
+  PublicationMatchSource,
   PublicationSearchResult,
   PublicationSearchRunSummary,
   RESULTS_STORAGE_KEY,
@@ -75,6 +76,10 @@ function normalizeConfidence(value: unknown): PublicationConfidence {
   return value === "high" || value === "medium" || value === "high_orcid" ? value : "medium";
 }
 
+function normalizeMatchSource(value: unknown): PublicationMatchSource {
+  return value === "name" || value === "orcid" || value === "both" ? value : "name";
+}
+
 function normalizeApiResult(value: unknown): PublicationSearchResult | null {
   if (!isRecord(value)) {
     return null;
@@ -90,6 +95,9 @@ function normalizeApiResult(value: unknown): PublicationSearchResult | null {
     has_lmic_country: value.has_lmic_country === true,
     lmic_countries: stringOrFallback(value.lmic_countries),
     confidence: normalizeConfidence(value.confidence),
+    orcid_used: value.orcid_used === true,
+    orcid_match: value.orcid_match === true,
+    match_source: normalizeMatchSource(value.match_source),
   };
 }
 

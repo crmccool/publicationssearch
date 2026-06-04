@@ -57,7 +57,7 @@ export async function POST(request: NextRequest) {
       faculty_count_failed: facultyErrors.length,
       result_count: results.length,
       duration_ms: durationMs,
-      search_method: "pubmed_author_only_resilient_details_fetch",
+      search_method: "hybrid_pubmed_orcid",
       faculty_errors: facultyErrors,
       audit,
       results,
