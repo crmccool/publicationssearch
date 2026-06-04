@@ -3,7 +3,12 @@
 import { ChangeEvent, useEffect, useMemo, useState } from "react";
 
 import { listFacultyRows, saveFacultyRows } from "@/lib/supabase/client";
-import { FacultyRecord, normalizeOrcid, REQUIRED_COLUMNS } from "@/lib/types/faculty";
+import {
+  FacultyRecord,
+  isValidOrcid,
+  normalizeFacultyRecord,
+  REQUIRED_COLUMNS,
+} from "@/lib/types/faculty";
 
 type CsvRow = Record<string, string>;
 
@@ -67,15 +72,41 @@ function parseCsv(text: string): { headers: string[]; rows: CsvRow[] } {
 }
 
 function mapCsvRowsToFaculty(rows: CsvRow[]): FacultyRecord[] {
-  return rows.map((row) => ({
-    email: row.email ?? "",
-    first_name: row.first_name ?? "",
-    last_name: row.last_name ?? "",
-    first_initial: row.first_initial ?? "",
-    primary_department: row.primary_department ?? "",
-    status: row.status ?? "",
-    orcid: normalizeOrcid(row.orcid),
-  }));
+  return rows.map((row) =>
+    normalizeFacultyRecord({
+      email: row.email,
+      first_name: row.first_name,
+      last_name: row.last_name,
+      first_initial: row.first_initial,
+      primary_department: row.primary_department,
+      status: row.status,
+      orcid: row.orcid,
+    }),
+  );
+}
+
+function getInvalidOrcidRows(rows: CsvRow[]): number[] {
+  return rows.reduce<number[]>((invalidRows, row, index) => {
+    if (!isValidOrcid(row.orcid)) {
+      invalidRows.push(index + 2);
+    }
+
+    return invalidRows;
+  }, []);
+}
+
+function formatInvalidOrcidMessage(invalidRows: number[]): string {
+  return `Malformed ORCID value${invalidRows.length === 1 ? "" : "s"} in CSV row${
+    invalidRows.length === 1 ? "" : "s"
+  } ${invalidRows.join(", ")}. Use a bare ID like 0000-0000-0000-0000 or https://orcid.org/0000-0000-0000-0000.`;
+}
+
+function formatRosterSaveError(error: string): string {
+  if (error.includes("PGRST102")) {
+    return "Roster upload failed. Supabase rejected the roster because not every row had the same fields. All roster rows must be normalized before saving. Please try uploading the CSV again.";
+  }
+
+  return `Roster upload failed. ${error}`;
 }
 
 export default function RosterPage() {
@@ -92,7 +123,10 @@ export default function RosterPage() {
     [headers],
   );
 
-  const canSave = rows.length > 0 && missingColumns.length === 0 && !isSaving;
+  const invalidOrcidRows = useMemo(() => getInvalidOrcidRows(rows), [rows]);
+
+  const canSave =
+    rows.length > 0 && missingColumns.length === 0 && invalidOrcidRows.length === 0 && !isSaving;
 
   const loadStoredRows = async () => {
     setIsLoadingStoredRows(true);
@@ -155,6 +189,15 @@ export default function RosterPage() {
       return;
     }
 
+    const invalidOrcids = getInvalidOrcidRows(parsed.rows);
+    if (invalidOrcids.length > 0) {
+      setMessage({
+        kind: "error",
+        text: formatInvalidOrcidMessage(invalidOrcids),
+      });
+      return;
+    }
+
     setMessage({
       kind: "success",
       text: "CSV validation passed. You can now save these rows to Supabase.",
@@ -169,11 +212,17 @@ export default function RosterPage() {
     setIsSaving(true);
     setMessage(null);
 
+    if (invalidOrcidRows.length > 0) {
+      setMessage({ kind: "error", text: formatInvalidOrcidMessage(invalidOrcidRows) });
+      setIsSaving(false);
+      return;
+    }
+
     const facultyRows = mapCsvRowsToFaculty(rows);
     const { data, error } = await saveFacultyRows(facultyRows);
 
     if (error) {
-      setMessage({ kind: "error", text: `Roster upload failed. ${error}` });
+      setMessage({ kind: "error", text: formatRosterSaveError(error) });
       setIsSaving(false);
       return;
     }
