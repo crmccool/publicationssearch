@@ -6,6 +6,8 @@ export type PublicationSearchMethod =
   | "hybrid_pubmed_orcid"
   | "pubmed_author_only_resilient_details_fetch";
 
+export type PublicationMatchSource = "name" | "orcid" | "both";
+
 export type PublicationSearchResult = {
   faculty_name: string;
   title: string;
@@ -16,6 +18,9 @@ export type PublicationSearchResult = {
   has_lmic_country: boolean;
   lmic_countries: string;
   confidence: PublicationConfidence;
+  orcid_used: boolean;
+  orcid_match: boolean;
+  match_source: PublicationMatchSource;
 };
 
 export type PublicationSearchRequest = {
@@ -46,6 +51,11 @@ export type PublicationSearchAudit = {
   last_faculty_attempted: string | null;
   faculty_processing_order: string[];
   early_exit_reason: string | null;
+  faculty_with_orcid: number;
+  orcid_searches_attempted: number;
+  orcid_pmids_found: number;
+  results_confirmed_by_orcid: number;
+  faculty_with_orcid_but_no_orcid_pmids: number;
 };
 
 export type FacultySearchError = {

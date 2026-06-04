@@ -6,6 +6,7 @@ import {
   InternationalFlag,
   PublicationConfidence,
   PublicationSearchAudit,
+  PublicationMatchSource,
   PublicationSearchResult,
   PublicationSearchRunSummary,
   RESULTS_STORAGE_KEY,
@@ -49,6 +50,10 @@ function normalizeConfidence(value: unknown): PublicationConfidence {
   return value === "high" || value === "medium" || value === "high_orcid" ? value : "medium";
 }
 
+function normalizeMatchSource(value: unknown): PublicationMatchSource {
+  return value === "name" || value === "orcid" || value === "both" ? value : "name";
+}
+
 function normalizeResult(value: unknown): PublicationSearchResult | null {
   if (!isRecord(value)) {
     return null;
@@ -64,6 +69,9 @@ function normalizeResult(value: unknown): PublicationSearchResult | null {
     has_lmic_country: value.has_lmic_country === true,
     lmic_countries: stringOrFallback(value.lmic_countries),
     confidence: normalizeConfidence(value.confidence),
+    orcid_used: value.orcid_used === true,
+    orcid_match: value.orcid_match === true,
+    match_source: normalizeMatchSource(value.match_source),
   };
 }
 
@@ -121,6 +129,13 @@ function normalizeAudit(value: unknown): PublicationSearchAudit | null {
       ? value.faculty_processing_order.filter((item): item is string => typeof item === "string")
       : [],
     early_exit_reason: nullableString(value.early_exit_reason),
+    faculty_with_orcid: numberOrFallback(value.faculty_with_orcid),
+    orcid_searches_attempted: numberOrFallback(value.orcid_searches_attempted),
+    orcid_pmids_found: numberOrFallback(value.orcid_pmids_found),
+    results_confirmed_by_orcid: numberOrFallback(value.results_confirmed_by_orcid),
+    faculty_with_orcid_but_no_orcid_pmids: numberOrFallback(
+      value.faculty_with_orcid_but_no_orcid_pmids,
+    ),
   };
 }
 
@@ -326,6 +341,11 @@ export default function ResultsPage() {
                 <li>First faculty attempted: {audit.first_faculty_attempted ?? "None"}</li>
                 <li>Last faculty attempted: {audit.last_faculty_attempted ?? "None"}</li>
                 <li>Early exit reason: {audit.early_exit_reason ?? "None"}</li>
+                <li>Faculty with ORCID: {audit.faculty_with_orcid}</li>
+                <li>ORCID searches attempted: {audit.orcid_searches_attempted}</li>
+                <li>ORCID PMIDs found: {audit.orcid_pmids_found}</li>
+                <li>Results confirmed by ORCID: {audit.results_confirmed_by_orcid}</li>
+                <li>Faculty with ORCID but no ORCID PMIDs: {audit.faculty_with_orcid_but_no_orcid_pmids}</li>
               </>
             ) : null}
           </ul>
@@ -396,12 +416,15 @@ export default function ResultsPage() {
               <th className="px-3 py-2 font-semibold text-slate-700">international_countries</th>
               <th className="px-3 py-2 font-semibold text-slate-700">LMIC</th>
               <th className="px-3 py-2 font-semibold text-slate-700">confidence</th>
+              <th className="px-3 py-2 font-semibold text-slate-700">ORCID used?</th>
+              <th className="px-3 py-2 font-semibold text-slate-700">ORCID match?</th>
+              <th className="px-3 py-2 font-semibold text-slate-700">Match source</th>
             </tr>
           </thead>
           <tbody>
             {filteredResults.length === 0 ? (
               <tr>
-                <td className="px-3 py-3 text-slate-500" colSpan={8}>
+                <td className="px-3 py-3 text-slate-500" colSpan={11}>
                   No results yet. Run a publication search to populate this table.
                 </td>
               </tr>
@@ -433,6 +456,9 @@ export default function ResultsPage() {
                     {result.has_lmic_country ? "Yes" : "No"}
                   </td>
                   <td className="px-3 py-2 align-top text-slate-700">{result.confidence}</td>
+                  <td className="px-3 py-2 align-top text-slate-700">{result.orcid_used ? "Yes" : "No"}</td>
+                  <td className="px-3 py-2 align-top text-slate-700">{result.orcid_match ? "Yes" : "No"}</td>
+                  <td className="px-3 py-2 align-top text-slate-700">{result.match_source}</td>
                 </tr>
               ))
             )}
