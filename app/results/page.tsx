@@ -8,39 +8,205 @@ import {
   PublicationSearchAudit,
   PublicationSearchResult,
   PublicationSearchRunSummary,
-  PublicationSearchStoredPayload,
   RESULTS_STORAGE_KEY,
 } from "@/lib/types/publication-search";
+
+type LoadedResultsPayload = {
+  results: PublicationSearchResult[];
+  runSummary: PublicationSearchRunSummary | null;
+  audit: PublicationSearchAudit | null;
+  error: string | null;
+};
+
+const EMPTY_LOADED_PAYLOAD: LoadedResultsPayload = {
+  results: [],
+  runSummary: null,
+  audit: null,
+  error: null,
+};
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function stringOrFallback(value: unknown, fallback = ""): string {
+  return typeof value === "string" ? value : fallback;
+}
+
+function nullableString(value: unknown): string | null {
+  return typeof value === "string" && value.length > 0 ? value : null;
+}
+
+function numberOrFallback(value: unknown, fallback = 0): number {
+  return typeof value === "number" && Number.isFinite(value) ? value : fallback;
+}
+
+function normalizeInternationalFlag(value: unknown): InternationalFlag {
+  return value === "true" || value === "false" || value === "unknown" ? value : "unknown";
+}
+
+function normalizeConfidence(value: unknown): PublicationConfidence {
+  return value === "high" || value === "medium" || value === "high_orcid" ? value : "medium";
+}
+
+function normalizeResult(value: unknown): PublicationSearchResult | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+
+  return {
+    faculty_name: stringOrFallback(value.faculty_name, "Unknown faculty"),
+    title: stringOrFallback(value.title, "Untitled publication"),
+    publication_date: stringOrFallback(value.publication_date, "Unknown date"),
+    PMID: stringOrFallback(value.PMID),
+    international_flag: normalizeInternationalFlag(value.international_flag),
+    international_countries: stringOrFallback(value.international_countries, "Unknown"),
+    has_lmic_country: value.has_lmic_country === true,
+    lmic_countries: stringOrFallback(value.lmic_countries),
+    confidence: normalizeConfidence(value.confidence),
+  };
+}
+
+function normalizeResults(value: unknown): PublicationSearchResult[] | null {
+  if (!Array.isArray(value)) {
+    return null;
+  }
+
+  return value.flatMap((item) => {
+    const normalized = normalizeResult(item);
+    return normalized ? [normalized] : [];
+  });
+}
+
+function normalizeRunSummary(value: unknown): PublicationSearchRunSummary | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+
+  return {
+    start_date: nullableString(value.start_date),
+    end_date: nullableString(value.end_date),
+    run_timestamp: stringOrFallback(value.run_timestamp, new Date().toISOString()),
+    faculty_count_loaded:
+      typeof value.faculty_count_loaded === "number" ? value.faculty_count_loaded : undefined,
+    faculty_count_searched: numberOrFallback(value.faculty_count_searched),
+    faculty_count_completed:
+      typeof value.faculty_count_completed === "number" ? value.faculty_count_completed : undefined,
+    faculty_count_failed:
+      typeof value.faculty_count_failed === "number" ? value.faculty_count_failed : undefined,
+    result_count: numberOrFallback(value.result_count),
+    search_method:
+      value.search_method === "hybrid_pubmed_orcid" ||
+      value.search_method === "pubmed_author_only_resilient_details_fetch"
+        ? value.search_method
+        : "hybrid_pubmed_orcid",
+  };
+}
+
+function normalizeAudit(value: unknown): PublicationSearchAudit | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+
+  return {
+    faculty_loaded: numberOrFallback(value.faculty_loaded),
+    faculty_attempted: numberOrFallback(value.faculty_attempted),
+    faculty_completed: numberOrFallback(value.faculty_completed),
+    faculty_failed: numberOrFallback(value.faculty_failed),
+    total_publications_found: numberOrFallback(value.total_publications_found),
+    total_publications_saved: numberOrFallback(value.total_publications_saved),
+    first_faculty_attempted: nullableString(value.first_faculty_attempted),
+    last_faculty_attempted: nullableString(value.last_faculty_attempted),
+    faculty_processing_order: Array.isArray(value.faculty_processing_order)
+      ? value.faculty_processing_order.filter((item): item is string => typeof item === "string")
+      : [],
+    early_exit_reason: nullableString(value.early_exit_reason),
+  };
+}
+
+function loadStoredResults(raw: string | null): LoadedResultsPayload {
+  if (!raw) {
+    return EMPTY_LOADED_PAYLOAD;
+  }
+
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+
+    if (Array.isArray(parsed)) {
+      return {
+        results: normalizeResults(parsed) ?? [],
+        runSummary: null,
+        audit: null,
+        error: null,
+      };
+    }
+
+    if (!isRecord(parsed)) {
+      return {
+        ...EMPTY_LOADED_PAYLOAD,
+        error: "Saved search results were not in a format this page can read.",
+      };
+    }
+
+    if (typeof parsed.error === "string") {
+      return {
+        ...EMPTY_LOADED_PAYLOAD,
+        error: `The saved search ended with an error: ${parsed.error}`,
+      };
+    }
+
+    const results = normalizeResults(parsed.results);
+    if (!results) {
+      return {
+        runSummary: normalizeRunSummary(parsed.run_summary),
+        audit: normalizeAudit(parsed.audit),
+        results: [],
+        error: "Saved search results were missing a valid results list.",
+      };
+    }
+
+    return {
+      results,
+      runSummary: normalizeRunSummary(parsed.run_summary),
+      audit: normalizeAudit(parsed.audit),
+      error: null,
+    };
+  } catch {
+    return {
+      ...EMPTY_LOADED_PAYLOAD,
+      error: "Saved search results could not be parsed. Please run the search again.",
+    };
+  }
+}
+
+function splitCountries(value: string | null | undefined): string[] {
+  return (value ?? "")
+    .split(";")
+    .map((country) => country.trim())
+    .filter((country) => country.length > 0);
+}
 
 export default function ResultsPage() {
   const [results, setResults] = useState<PublicationSearchResult[]>([]);
   const [runSummary, setRunSummary] = useState<PublicationSearchRunSummary | null>(null);
   const [audit, setAudit] = useState<PublicationSearchAudit | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [internationalFilter, setInternationalFilter] = useState<"all" | InternationalFlag>("true");
   const [confidenceFilter, setConfidenceFilter] = useState<"all" | PublicationConfidence>("all");
   const [countryFilter, setCountryFilter] = useState("all");
 
   useEffect(() => {
-    const raw = sessionStorage.getItem(RESULTS_STORAGE_KEY);
-    if (!raw) {
-      return;
-    }
-
     try {
-      const parsed = JSON.parse(raw) as PublicationSearchStoredPayload | PublicationSearchResult[];
-      if (Array.isArray(parsed)) {
-        setResults(parsed);
-        setRunSummary(null);
-        setAudit(null);
-      } else {
-        setResults(parsed.results ?? []);
-        setRunSummary(parsed.run_summary ?? null);
-        setAudit(parsed.audit ?? null);
-      }
+      const loaded = loadStoredResults(sessionStorage.getItem(RESULTS_STORAGE_KEY));
+      setResults(loaded.results);
+      setRunSummary(loaded.runSummary);
+      setAudit(loaded.audit);
+      setLoadError(loaded.error);
     } catch {
       setResults([]);
       setRunSummary(null);
       setAudit(null);
+      setLoadError("Your browser blocked access to saved search results. Please run the search again.");
     }
   }, []);
 
@@ -49,14 +215,21 @@ export default function ResultsPage() {
       return "Any date";
     }
 
-    return new Date(`${date}T00:00:00`).toLocaleDateString();
+    const parsedDate = new Date(`${date}T00:00:00`);
+    return Number.isNaN(parsedDate.getTime()) ? "Any date" : parsedDate.toLocaleDateString();
   };
 
-  const formatRunTimestamp = (timestamp: string) =>
-    new Date(timestamp).toLocaleString(undefined, {
+  const formatRunTimestamp = (timestamp: string) => {
+    const parsedTimestamp = new Date(timestamp);
+    if (Number.isNaN(parsedTimestamp.getTime())) {
+      return "Unknown run time";
+    }
+
+    return parsedTimestamp.toLocaleString(undefined, {
       dateStyle: "medium",
       timeStyle: "short",
     });
+  };
 
   const filteredResults = useMemo(
     () =>
@@ -65,10 +238,7 @@ export default function ResultsPage() {
           internationalFilter === "all" || result.international_flag === internationalFilter;
         const confidenceMatches =
           confidenceFilter === "all" || result.confidence === confidenceFilter;
-        const countries = result.international_countries
-          .split(";")
-          .map((country) => country.trim())
-          .filter((country) => country.length > 0);
+        const countries = splitCountries(result.international_countries);
         const countryMatches = countryFilter === "all" || countries.includes(countryFilter);
 
         return internationalMatches && confidenceMatches && countryMatches;
@@ -80,11 +250,7 @@ export default function ResultsPage() {
     const countries = new Set<string>();
 
     results.forEach((result) => {
-      result.international_countries
-        .split(";")
-        .map((country) => country.trim())
-        .filter((country) => country.length > 0)
-        .forEach((country) => countries.add(country));
+      splitCountries(result.international_countries).forEach((country) => countries.add(country));
     });
 
     return [...countries].sort((a, b) => a.localeCompare(b));
@@ -116,10 +282,8 @@ export default function ResultsPage() {
     results
       .filter((result) => result.international_flag === "true")
       .forEach((result) => {
-        result.international_countries
-          .split(";")
-          .map((country) => country.trim())
-          .filter((country) => country.length > 0 && country.toLowerCase() !== "unknown")
+        splitCountries(result.international_countries)
+          .filter((country) => country.toLowerCase() !== "unknown")
           .forEach((country) => countries.add(country));
       });
 
@@ -133,6 +297,12 @@ export default function ResultsPage() {
         Review hybrid PubMed-first publication matches and filter by international status and
         confidence.
       </p>
+      {loadError ? (
+        <div className="mt-4 rounded-md border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+          <p className="font-semibold">We could not load the saved search results.</p>
+          <p className="mt-1">{loadError}</p>
+        </div>
+      ) : null}
       {runSummary ? (
         <div className="mt-4 rounded-md border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-900">
           <p className="font-semibold">Search run summary</p>
@@ -236,24 +406,28 @@ export default function ResultsPage() {
                 </td>
               </tr>
             ) : (
-              filteredResults.map((result) => (
-                <tr key={`${result.PMID}-${result.faculty_name}`} className="border-b border-slate-100">
+              filteredResults.map((result, index) => (
+                <tr key={`${result.PMID || "missing-pmid"}-${result.faculty_name}-${index}`} className="border-b border-slate-100">
                   <td className="px-3 py-2 align-top text-slate-700">{result.faculty_name}</td>
                   <td className="px-3 py-2 align-top text-slate-700">
-                    <a
-                      href={`https://pubmed.ncbi.nlm.nih.gov/${result.PMID}/`}
-                      target="_blank"
-                      rel="noreferrer noopener"
-                      className="text-blue-700 underline-offset-2 hover:underline"
-                    >
-                      {result.title}
-                    </a>
+                    {result.PMID ? (
+                      <a
+                        href={`https://pubmed.ncbi.nlm.nih.gov/${result.PMID}/`}
+                        target="_blank"
+                        rel="noreferrer noopener"
+                        className="text-blue-700 underline-offset-2 hover:underline"
+                      >
+                        {result.title}
+                      </a>
+                    ) : (
+                      result.title
+                    )}
                   </td>
                   <td className="px-3 py-2 align-top text-slate-700">{result.publication_date}</td>
-                  <td className="px-3 py-2 align-top text-slate-700">{result.PMID}</td>
+                  <td className="px-3 py-2 align-top text-slate-700">{result.PMID || "Unknown"}</td>
                   <td className="px-3 py-2 align-top text-slate-700">{result.international_flag}</td>
                   <td className="px-3 py-2 align-top text-slate-700">
-                    {result.international_countries}
+                    {result.international_countries || "Unknown"}
                   </td>
                   <td className="px-3 py-2 align-top text-slate-700">
                     {result.has_lmic_country ? "Yes" : "No"}

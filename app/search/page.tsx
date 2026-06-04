@@ -4,18 +4,105 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 
 import {
+  InternationalFlag,
+  PublicationConfidence,
   PublicationSearchAudit,
   PublicationSearchMethod,
   PublicationSearchResult,
   PublicationSearchRunSummary,
-  PublicationSearchStoredPayload,
   RESULTS_STORAGE_KEY,
 } from "@/lib/types/publication-search";
+
+type PublicationSearchApiPayload = {
+  start_date?: string | null;
+  end_date?: string | null;
+  run_timestamp?: string;
+  faculty_count_loaded?: number;
+  faculty_count_searched?: number;
+  faculty_count_completed?: number;
+  faculty_count_failed?: number;
+  result_count?: number;
+  search_method?: PublicationSearchMethod;
+  audit?: PublicationSearchAudit | null;
+  results?: unknown;
+  error?: unknown;
+};
 
 type Message = {
   kind: "error" | "success";
   text: string;
 };
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function parseJsonObject(raw: string): Record<string, unknown> | null {
+  if (!raw) {
+    return null;
+  }
+
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    return isRecord(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function getErrorMessage(raw: string, fallback: string): string {
+  const parsed = parseJsonObject(raw);
+  if (typeof parsed?.error === "string" && parsed.error.trim().length > 0) {
+    return parsed.error;
+  }
+
+  if (raw.trim().length > 0) {
+    return raw.slice(0, 200);
+  }
+
+  return fallback;
+}
+
+function stringOrFallback(value: unknown, fallback = ""): string {
+  return typeof value === "string" ? value : fallback;
+}
+
+function normalizeInternationalFlag(value: unknown): InternationalFlag {
+  return value === "true" || value === "false" || value === "unknown" ? value : "unknown";
+}
+
+function normalizeConfidence(value: unknown): PublicationConfidence {
+  return value === "high" || value === "medium" || value === "high_orcid" ? value : "medium";
+}
+
+function normalizeApiResult(value: unknown): PublicationSearchResult | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+
+  return {
+    faculty_name: stringOrFallback(value.faculty_name, "Unknown faculty"),
+    title: stringOrFallback(value.title, "Untitled publication"),
+    publication_date: stringOrFallback(value.publication_date, "Unknown date"),
+    PMID: stringOrFallback(value.PMID),
+    international_flag: normalizeInternationalFlag(value.international_flag),
+    international_countries: stringOrFallback(value.international_countries, "Unknown"),
+    has_lmic_country: value.has_lmic_country === true,
+    lmic_countries: stringOrFallback(value.lmic_countries),
+    confidence: normalizeConfidence(value.confidence),
+  };
+}
+
+function normalizeApiResults(value: unknown): PublicationSearchResult[] | null {
+  if (!Array.isArray(value)) {
+    return null;
+  }
+
+  return value.flatMap((item) => {
+    const normalized = normalizeApiResult(item);
+    return normalized ? [normalized] : [];
+  });
+}
 
 export default function SearchPage() {
   const router = useRouter();
@@ -53,37 +140,42 @@ export default function SearchPage() {
         }),
       });
 
+      const rawResponse = await response.text();
+
       if (!response.ok) {
-        const rawError = await response.text();
-        let errorMessage = "Publication search failed.";
-        if (rawError) {
-          try {
-            const parsed = JSON.parse(rawError) as { error?: string };
-            errorMessage = parsed.error ?? errorMessage;
-          } catch {
-            errorMessage = rawError.slice(0, 200);
-          }
-        }
         setMessage({
           kind: "error",
-          text: errorMessage,
+          text: getErrorMessage(rawResponse, "Publication search failed. Please try again."),
         });
         return;
       }
 
-      const payload = (await response.json()) as {
-        start_date?: string | null;
-        end_date?: string | null;
-        run_timestamp?: string;
-        faculty_count_loaded?: number;
-        faculty_count_searched?: number;
-        faculty_count_completed?: number;
-        faculty_count_failed?: number;
-        result_count?: number;
-        search_method?: PublicationSearchMethod;
-        audit?: PublicationSearchAudit;
-        results?: PublicationSearchResult[];
-      };
+      const parsedPayload = parseJsonObject(rawResponse);
+      if (!parsedPayload) {
+        setMessage({
+          kind: "error",
+          text: "Publication search returned an unreadable response. Please try again.",
+        });
+        return;
+      }
+
+      const payload = parsedPayload as PublicationSearchApiPayload;
+      if (typeof payload.error === "string" && payload.error.trim().length > 0) {
+        setMessage({
+          kind: "error",
+          text: payload.error,
+        });
+        return;
+      }
+
+      const results = normalizeApiResults(payload.results);
+      if (!results) {
+        setMessage({
+          kind: "error",
+          text: "Publication search completed, but the response did not include a valid results list.",
+        });
+        return;
+      }
 
       const runSummary: PublicationSearchRunSummary = {
         start_date: payload.start_date ?? null,
@@ -93,24 +185,32 @@ export default function SearchPage() {
         faculty_count_searched: payload.faculty_count_searched ?? 0,
         faculty_count_completed: payload.faculty_count_completed,
         faculty_count_failed: payload.faculty_count_failed,
-        result_count: payload.result_count ?? 0,
+        result_count: payload.result_count ?? results.length,
         search_method: payload.search_method ?? "hybrid_pubmed_orcid",
       };
 
-      const storedPayload: PublicationSearchStoredPayload = {
+      const storedPayload = {
         run_summary: runSummary,
-        audit: payload.audit,
-        results: payload.results ?? [],
+        audit: payload.audit ?? undefined,
+        results,
       };
 
-      sessionStorage.setItem(RESULTS_STORAGE_KEY, JSON.stringify(storedPayload));
+      try {
+        sessionStorage.setItem(RESULTS_STORAGE_KEY, JSON.stringify(storedPayload));
+      } catch {
+        setMessage({
+          kind: "error",
+          text: "Search completed, but your browser could not save the results for display.",
+        });
+        return;
+      }
 
       router.push("/results");
     } catch (error) {
       setIsRunning(false);
       setMessage({
         kind: "error",
-        text: error instanceof Error ? error.message : "Publication search failed.",
+        text: error instanceof Error ? error.message : "Publication search failed. Please try again.",
       });
       return;
     } finally {
