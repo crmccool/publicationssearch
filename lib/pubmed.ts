@@ -5,6 +5,7 @@ import {
   FacultySearchError,
   InternationalFlag,
   PublicationConfidence,
+  PublicationSearchAudit,
   PublicationSearchResult,
 } from "@/lib/types/publication-search";
 
@@ -45,6 +46,7 @@ type PubMedSearchFailureStage =
 export type SearchFacultyPublicationsOutcome = {
   results: PublicationSearchResult[];
   facultyErrors: FacultySearchError[];
+  audit: PublicationSearchAudit;
 };
 
 const PUBMED_RETMAX = 10_000;
@@ -62,7 +64,6 @@ const PUBMED_MIN_REQUEST_INTERVAL_MS = 250;
 const PUBMED_429_MAX_RETRIES = 2;
 const PUBMED_429_BASE_BACKOFF_MS = 2500;
 const PUBMED_EFETCH_BATCH_SIZE = 5;
-const PUBMED_RUN_SOFT_CAP_MS = 45_000;
 const PUBMED_FORENSIC_TARGET_PMID = "41921652";
 const PUBMED_DEBUG_SINGLE_FACULTY = process.env.PUBMED_DEBUG_SINGLE_FACULTY?.trim().toLowerCase() ?? "";
 
@@ -1193,24 +1194,30 @@ export async function searchFacultyPublications(
   const facultyErrors: FacultySearchError[] = [];
   const delayBetweenRequestsMs = 200;
   const seenFacultyPmid = new Set<string>();
+  const facultyProcessingOrder: string[] = [];
+  let facultyAttempted = 0;
+  let facultyCompleted = 0;
+  let totalPublicationsFound = 0;
+  let totalPublicationsSaved = 0;
+  let firstFacultyAttempted: string | null = null;
+  let lastFacultyAttempted: string | null = null;
+  const earlyExitReason: string | null = null;
+
+  console.info(`[pubmed-audit] faculty_loaded=${facultyRows.length}`);
 
   for (const faculty of facultyRows) {
-    const elapsedMs = Date.now() - runStartAt;
-    if (elapsedMs >= PUBMED_RUN_SOFT_CAP_MS) {
-      const message = `Soft run cap reached after ${elapsedMs}ms; returning partial results.`;
-      facultyErrors.push({
-        faculty_name: "RUN_SOFT_CAP",
-        stage: "unknown",
-        message,
-      });
-      console.warn(`[pubmed-warn] run_soft_cap elapsed_ms=${elapsedMs} limit_ms=${PUBMED_RUN_SOFT_CAP_MS}`);
-      break;
-    }
-
     const facultyStartAt = Date.now();
+    const facultyName = `${faculty.first_name} ${faculty.last_name}`.trim();
+    facultyAttempted += 1;
+    firstFacultyAttempted ??= facultyName;
+    lastFacultyAttempted = facultyName;
+    facultyProcessingOrder.push(facultyName);
+    console.info(
+      `[pubmed-audit] faculty_attempt index=${facultyAttempted} of=${facultyRows.length} faculty="${facultyName}" email="${faculty.email}"`,
+    );
+
     try {
       const idSearchResult = await fetchPubMedIdsForFaculty(faculty, startDate, endDate);
-      const facultyName = `${faculty.first_name} ${faculty.last_name}`.trim();
       const isAkbarWaljee = facultyName.toLowerCase() === "akbar waljee";
       const isSingleFacultyDebug = shouldEmitSingleFacultyDebug(facultyName);
       const { pmids } = idSearchResult;
@@ -1357,6 +1364,7 @@ export async function searchFacultyPublications(
       };
 
       const evaluation = evaluatePublicationSet(publications);
+      totalPublicationsFound += evaluation.accepted.length;
 
       let finalAcceptedCount = 0;
       for (const { publication, hasNameMatchRaw } of evaluation.accepted) {
@@ -1403,11 +1411,16 @@ export async function searchFacultyPublications(
         `[pubmed-debug] stage_counts faculty="${facultyName}" pmids_retrieved=${retrievedPmidsCount} candidate_pmids=${candidatePmids.length} parsed_publications=${publications.length} pmids_processed=${evaluation.pmidsProcessed} after_date_filter=${evaluation.afterDateFilterCount} after_author_match=${evaluation.afterAuthorFilterCount} after_umich_affiliation_filter=${evaluation.afterUmAffiliationCount} disable_date_filter=${PUBMED_DEBUG_DISABLE_DATE_FILTER} disable_author_filter=${PUBMED_DEBUG_DISABLE_AUTHOR_FILTER} disable_umich_filter=${PUBMED_DEBUG_DISABLE_UM_AFFILIATION_FILTER}`,
       );
 
+      totalPublicationsSaved += finalAcceptedCount;
+      facultyCompleted += 1;
+
       console.info(
         `[pubmed-debug] faculty_timing faculty="${facultyName}" duration_ms=${Date.now() - facultyStartAt} final_accepted=${finalAcceptedCount}`,
       );
+      console.info(
+        `[pubmed-audit] faculty_complete index=${facultyAttempted} faculty="${facultyName}" qualifying_publications_found=${evaluation.accepted.length} publications_saved=${finalAcceptedCount} cumulative_found=${totalPublicationsFound} cumulative_saved=${totalPublicationsSaved}`,
+      );
     } catch (error) {
-      const facultyName = `${faculty.first_name} ${faculty.last_name}`.trim();
       const details = formatErrorDetails(error);
       const stage =
         typeof error === "object" &&
@@ -1416,6 +1429,10 @@ export async function searchFacultyPublications(
         typeof (error as { stage?: string }).stage === "string"
           ? ((error as { stage: PubMedSearchFailureStage }).stage ?? "unknown")
           : "unknown";
+
+      console.info(
+        `[pubmed-audit] faculty_failed index=${facultyAttempted} faculty="${facultyName}" stage="${stage}" message="${details.message}"`,
+      );
 
       facultyErrors.push({
         faculty_name: facultyName,
@@ -1432,9 +1449,25 @@ export async function searchFacultyPublications(
     }
   }
 
+  const audit: PublicationSearchAudit = {
+    faculty_loaded: facultyRows.length,
+    faculty_attempted: facultyAttempted,
+    faculty_completed: facultyCompleted,
+    faculty_failed: facultyErrors.length,
+    total_publications_found: totalPublicationsFound,
+    total_publications_saved: totalPublicationsSaved,
+    first_faculty_attempted: firstFacultyAttempted,
+    last_faculty_attempted: lastFacultyAttempted,
+    faculty_processing_order: facultyProcessingOrder,
+    early_exit_reason: earlyExitReason,
+  };
+
   console.info(
-    `[pubmed-debug] run_complete duration_ms=${Date.now() - runStartAt} faculty_total=${facultyRows.length} results_total=${results.length} faculty_errors=${facultyErrors.length}`,
+    `[pubmed-debug] run_complete duration_ms=${Date.now() - runStartAt} faculty_total=${facultyRows.length} faculty_attempted=${facultyAttempted} faculty_completed=${facultyCompleted} results_total=${results.length} faculty_errors=${facultyErrors.length}`,
+  );
+  console.info(
+    `[pubmed-audit] run_summary faculty_loaded=${audit.faculty_loaded} faculty_attempted=${audit.faculty_attempted} faculty_completed=${audit.faculty_completed} faculty_failed=${audit.faculty_failed} total_publications_found=${audit.total_publications_found} total_publications_saved=${audit.total_publications_saved} first_faculty_attempted="${audit.first_faculty_attempted ?? ""}" last_faculty_attempted="${audit.last_faculty_attempted ?? ""}" early_exit_reason="${audit.early_exit_reason ?? "none"}" processing_order="${audit.faculty_processing_order.join(" | ")}"`,
   );
 
-  return { results, facultyErrors };
+  return { results, facultyErrors, audit };
 }

@@ -5,6 +5,7 @@ import { useEffect, useMemo, useState } from "react";
 import {
   InternationalFlag,
   PublicationConfidence,
+  PublicationSearchAudit,
   PublicationSearchResult,
   PublicationSearchRunSummary,
   PublicationSearchStoredPayload,
@@ -14,6 +15,7 @@ import {
 export default function ResultsPage() {
   const [results, setResults] = useState<PublicationSearchResult[]>([]);
   const [runSummary, setRunSummary] = useState<PublicationSearchRunSummary | null>(null);
+  const [audit, setAudit] = useState<PublicationSearchAudit | null>(null);
   const [internationalFilter, setInternationalFilter] = useState<"all" | InternationalFlag>("true");
   const [confidenceFilter, setConfidenceFilter] = useState<"all" | PublicationConfidence>("all");
   const [countryFilter, setCountryFilter] = useState("all");
@@ -29,13 +31,16 @@ export default function ResultsPage() {
       if (Array.isArray(parsed)) {
         setResults(parsed);
         setRunSummary(null);
+        setAudit(null);
       } else {
         setResults(parsed.results ?? []);
         setRunSummary(parsed.run_summary ?? null);
+        setAudit(parsed.audit ?? null);
       }
     } catch {
       setResults([]);
       setRunSummary(null);
+      setAudit(null);
     }
   }, []);
 
@@ -137,12 +142,22 @@ export default function ResultsPage() {
               {formatDateRange(runSummary.end_date)}
             </li>
             <li>Run time: {formatRunTimestamp(runSummary.run_timestamp)}</li>
-            <li>Faculty searched: {runSummary.faculty_count_searched}</li>
+            <li>Faculty loaded: {runSummary.faculty_count_loaded ?? runSummary.faculty_count_searched}</li>
+            <li>Faculty attempted: {runSummary.faculty_count_searched}</li>
+            <li>Faculty completed: {runSummary.faculty_count_completed ?? runSummary.faculty_count_searched}</li>
+            <li>Faculty failed: {runSummary.faculty_count_failed ?? 0}</li>
             <li>Total results: {runSummary.result_count}</li>
             <li>International results: {internationalResultCount}</li>
             <li>Faculty with international results: {facultyWithInternationalResultsCount}</li>
             <li>Unique countries represented: {uniqueInternationalCountriesCount}</li>
             <li>Search method: {runSummary.search_method}</li>
+            {audit ? (
+              <>
+                <li>First faculty attempted: {audit.first_faculty_attempted ?? "None"}</li>
+                <li>Last faculty attempted: {audit.last_faculty_attempted ?? "None"}</li>
+                <li>Early exit reason: {audit.early_exit_reason ?? "None"}</li>
+              </>
+            ) : null}
           </ul>
         </div>
       ) : null}

@@ -26,26 +26,40 @@ export async function POST(request: NextRequest) {
       orcid: normalizeOrcid(row.orcid),
     }));
 
-    const { results, facultyErrors } = await searchFacultyPublications(
+    const firstActiveFaculty = normalizedActiveFaculty[0]
+      ? `${normalizedActiveFaculty[0].first_name} ${normalizedActiveFaculty[0].last_name}`.trim()
+      : "";
+    const lastActiveFaculty = normalizedActiveFaculty.at(-1)
+      ? `${normalizedActiveFaculty.at(-1)?.first_name} ${normalizedActiveFaculty.at(-1)?.last_name}`.trim()
+      : "";
+
+    console.info(
+      `[pubmed-audit] api_faculty_loaded total_rows=${facultyRows?.length ?? 0} active_rows=${normalizedActiveFaculty.length} first_active_faculty="${firstActiveFaculty}" last_active_faculty="${lastActiveFaculty}"`,
+    );
+
+    const { results, facultyErrors, audit } = await searchFacultyPublications(
       normalizedActiveFaculty,
       body.startDate,
       body.endDate,
     );
     const durationMs = Date.now() - runStartedAt;
     console.info(
-      `[pubmed-debug] api_request_completed duration_ms=${durationMs} faculty_searched=${normalizedActiveFaculty.length} faculty_failed=${facultyErrors.length} result_count=${results.length}`,
+      `[pubmed-debug] api_request_completed duration_ms=${durationMs} faculty_loaded=${audit.faculty_loaded} faculty_attempted=${audit.faculty_attempted} faculty_completed=${audit.faculty_completed} faculty_failed=${facultyErrors.length} result_count=${results.length}`,
     );
 
     return NextResponse.json({
       start_date: body.startDate ?? null,
       end_date: body.endDate ?? null,
       run_timestamp: new Date().toISOString(),
-      faculty_count_searched: normalizedActiveFaculty.length,
+      faculty_count_loaded: audit.faculty_loaded,
+      faculty_count_searched: audit.faculty_attempted,
+      faculty_count_completed: audit.faculty_completed,
       faculty_count_failed: facultyErrors.length,
       result_count: results.length,
       duration_ms: durationMs,
       search_method: "pubmed_author_only_resilient_details_fetch",
       faculty_errors: facultyErrors,
+      audit,
       results,
     });
   } catch (error) {

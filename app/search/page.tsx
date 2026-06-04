@@ -4,6 +4,8 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 
 import {
+  PublicationSearchAudit,
+  PublicationSearchMethod,
   PublicationSearchResult,
   PublicationSearchRunSummary,
   PublicationSearchStoredPayload,
@@ -73,9 +75,13 @@ export default function SearchPage() {
         start_date?: string | null;
         end_date?: string | null;
         run_timestamp?: string;
+        faculty_count_loaded?: number;
         faculty_count_searched?: number;
+        faculty_count_completed?: number;
+        faculty_count_failed?: number;
         result_count?: number;
-        search_method?: "hybrid_pubmed_orcid";
+        search_method?: PublicationSearchMethod;
+        audit?: PublicationSearchAudit;
         results?: PublicationSearchResult[];
       };
 
@@ -83,13 +89,17 @@ export default function SearchPage() {
         start_date: payload.start_date ?? null,
         end_date: payload.end_date ?? null,
         run_timestamp: payload.run_timestamp ?? new Date().toISOString(),
+        faculty_count_loaded: payload.faculty_count_loaded,
         faculty_count_searched: payload.faculty_count_searched ?? 0,
+        faculty_count_completed: payload.faculty_count_completed,
+        faculty_count_failed: payload.faculty_count_failed,
         result_count: payload.result_count ?? 0,
         search_method: payload.search_method ?? "hybrid_pubmed_orcid",
       };
 
       const storedPayload: PublicationSearchStoredPayload = {
         run_summary: runSummary,
+        audit: payload.audit,
         results: payload.results ?? [],
       };
 
