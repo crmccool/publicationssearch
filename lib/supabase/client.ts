@@ -1,4 +1,4 @@
-import { FACULTY_TABLE, FacultyRecord } from "@/lib/types/faculty";
+import { FACULTY_TABLE, FacultyRecord, normalizeFacultyRecord } from "@/lib/types/faculty";
 
 type SupabaseResult<T> = {
   data: T | null;
@@ -81,11 +81,13 @@ export async function saveFacultyRows(
     return { data: [], error: null };
   }
 
+  const normalizedRows = rows.map(normalizeFacultyRecord);
+
   return runSupabaseRequest<FacultyRecord[]>(FACULTY_TABLE, {
     method: "POST",
     headers: {
       Prefer: "return=representation",
     },
-    body: JSON.stringify(rows),
+    body: JSON.stringify(normalizedRows),
   });
 }
