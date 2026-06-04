@@ -2,6 +2,10 @@ export type InternationalFlag = "true" | "false" | "unknown";
 
 export type PublicationConfidence = "high" | "medium" | "high_orcid";
 
+export type PublicationSearchMethod =
+  | "hybrid_pubmed_orcid"
+  | "pubmed_author_only_resilient_details_fetch";
+
 export type PublicationSearchResult = {
   faculty_name: string;
   title: string;
@@ -23,10 +27,25 @@ export type PublicationSearchRunSummary = {
   start_date: string | null;
   end_date: string | null;
   run_timestamp: string;
+  faculty_count_loaded?: number;
   faculty_count_searched: number;
+  faculty_count_completed?: number;
   faculty_count_failed?: number;
   result_count: number;
-  search_method: "hybrid_pubmed_orcid";
+  search_method: PublicationSearchMethod;
+};
+
+export type PublicationSearchAudit = {
+  faculty_loaded: number;
+  faculty_attempted: number;
+  faculty_completed: number;
+  faculty_failed: number;
+  total_publications_found: number;
+  total_publications_saved: number;
+  first_faculty_attempted: string | null;
+  last_faculty_attempted: string | null;
+  faculty_processing_order: string[];
+  early_exit_reason: string | null;
 };
 
 export type FacultySearchError = {
@@ -46,6 +65,7 @@ export type FacultySearchError = {
 
 export type PublicationSearchStoredPayload = {
   run_summary: PublicationSearchRunSummary;
+  audit?: PublicationSearchAudit;
   faculty_errors?: FacultySearchError[];
   results: PublicationSearchResult[];
 };
