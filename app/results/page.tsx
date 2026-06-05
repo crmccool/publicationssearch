@@ -43,15 +43,52 @@ function numberOrFallback(value: unknown, fallback = 0): number {
 }
 
 function normalizeInternationalFlag(value: unknown): InternationalFlag {
-  return value === "true" || value === "false" || value === "unknown" ? value : "unknown";
+  return value === "true" || value === "false" || value === "unknown"
+    ? value
+    : "unknown";
 }
 
 function normalizeConfidence(value: unknown): PublicationConfidence {
-  return value === "high" || value === "medium" || value === "high_orcid" ? value : "medium";
+  return value === "high" || value === "medium" || value === "high_orcid"
+    ? value
+    : "medium";
 }
 
 function normalizeMatchSource(value: unknown): PublicationMatchSource {
-  return value === "name" || value === "orcid" || value === "both" ? value : "name";
+  return value === "name" || value === "orcid" || value === "both"
+    ? value
+    : "name";
+}
+
+function normalizeLmicValue(value: unknown): boolean {
+  if (typeof value === "boolean") {
+    return value;
+  }
+
+  if (typeof value === "string") {
+    const normalizedValue = value.trim().toLowerCase();
+    if (normalizedValue === "yes" || normalizedValue === "true") {
+      return true;
+    }
+
+    if (normalizedValue === "no" || normalizedValue === "false") {
+      return false;
+    }
+  }
+
+  return false;
+}
+
+function normalizeInternationalCountries(value: unknown): string {
+  if (Array.isArray(value)) {
+    return value
+      .filter((country): country is string => typeof country === "string")
+      .map((country) => country.trim())
+      .filter((country) => country.length > 0)
+      .join("; ");
+  }
+
+  return stringOrFallback(value, "Unknown");
 }
 
 function normalizeResult(value: unknown): PublicationSearchResult | null {
@@ -65,8 +102,10 @@ function normalizeResult(value: unknown): PublicationSearchResult | null {
     publication_date: stringOrFallback(value.publication_date, "Unknown date"),
     PMID: stringOrFallback(value.PMID),
     international_flag: normalizeInternationalFlag(value.international_flag),
-    international_countries: stringOrFallback(value.international_countries, "Unknown"),
-    has_lmic_country: value.has_lmic_country === true,
+    international_countries: normalizeInternationalCountries(
+      value.international_countries,
+    ),
+    has_lmic_country: normalizeLmicValue(value.has_lmic_country),
     lmic_countries: stringOrFallback(value.lmic_countries),
     confidence: normalizeConfidence(value.confidence),
     orcid_used: value.orcid_used === true,
@@ -86,7 +125,9 @@ function normalizeResults(value: unknown): PublicationSearchResult[] | null {
   });
 }
 
-function normalizeRunSummary(value: unknown): PublicationSearchRunSummary | null {
+function normalizeRunSummary(
+  value: unknown,
+): PublicationSearchRunSummary | null {
   if (!isRecord(value)) {
     return null;
   }
@@ -94,14 +135,23 @@ function normalizeRunSummary(value: unknown): PublicationSearchRunSummary | null
   return {
     start_date: nullableString(value.start_date),
     end_date: nullableString(value.end_date),
-    run_timestamp: stringOrFallback(value.run_timestamp, new Date().toISOString()),
+    run_timestamp: stringOrFallback(
+      value.run_timestamp,
+      new Date().toISOString(),
+    ),
     faculty_count_loaded:
-      typeof value.faculty_count_loaded === "number" ? value.faculty_count_loaded : undefined,
+      typeof value.faculty_count_loaded === "number"
+        ? value.faculty_count_loaded
+        : undefined,
     faculty_count_searched: numberOrFallback(value.faculty_count_searched),
     faculty_count_completed:
-      typeof value.faculty_count_completed === "number" ? value.faculty_count_completed : undefined,
+      typeof value.faculty_count_completed === "number"
+        ? value.faculty_count_completed
+        : undefined,
     faculty_count_failed:
-      typeof value.faculty_count_failed === "number" ? value.faculty_count_failed : undefined,
+      typeof value.faculty_count_failed === "number"
+        ? value.faculty_count_failed
+        : undefined,
     result_count: numberOrFallback(value.result_count),
     search_method:
       value.search_method === "hybrid_pubmed_orcid" ||
@@ -126,13 +176,17 @@ function normalizeAudit(value: unknown): PublicationSearchAudit | null {
     first_faculty_attempted: nullableString(value.first_faculty_attempted),
     last_faculty_attempted: nullableString(value.last_faculty_attempted),
     faculty_processing_order: Array.isArray(value.faculty_processing_order)
-      ? value.faculty_processing_order.filter((item): item is string => typeof item === "string")
+      ? value.faculty_processing_order.filter(
+          (item): item is string => typeof item === "string",
+        )
       : [],
     early_exit_reason: nullableString(value.early_exit_reason),
     faculty_with_orcid: numberOrFallback(value.faculty_with_orcid),
     orcid_searches_attempted: numberOrFallback(value.orcid_searches_attempted),
     orcid_pmids_found: numberOrFallback(value.orcid_pmids_found),
-    results_confirmed_by_orcid: numberOrFallback(value.results_confirmed_by_orcid),
+    results_confirmed_by_orcid: numberOrFallback(
+      value.results_confirmed_by_orcid,
+    ),
     faculty_with_orcid_but_no_orcid_pmids: numberOrFallback(
       value.faculty_with_orcid_but_no_orcid_pmids,
     ),
@@ -189,30 +243,58 @@ function loadStoredResults(raw: string | null): LoadedResultsPayload {
   } catch {
     return {
       ...EMPTY_LOADED_PAYLOAD,
-      error: "Saved search results could not be parsed. Please run the search again.",
+      error:
+        "Saved search results could not be parsed. Please run the search again.",
     };
   }
 }
 
-function splitCountries(value: string | null | undefined): string[] {
-  return (value ?? "")
+function splitCountries(value: string | string[] | null | undefined): string[] {
+  const countriesValue = Array.isArray(value) ? value.join(";") : (value ?? "");
+
+  return countriesValue
     .split(";")
     .map((country) => country.trim())
     .filter((country) => country.length > 0);
 }
 
+function isUnknownCountry(country: string): boolean {
+  return country.trim().toLowerCase() === "unknown";
+}
+
+function hasOnlyUnknownCountries(result: PublicationSearchResult): boolean {
+  const countries = splitCountries(result.international_countries);
+
+  if (countries.length === 0) {
+    return result.international_flag === "true";
+  }
+
+  return countries.every(isUnknownCountry);
+}
+
+type LmicFilter = "all" | "yes" | "no";
+
 export default function ResultsPage() {
   const [results, setResults] = useState<PublicationSearchResult[]>([]);
-  const [runSummary, setRunSummary] = useState<PublicationSearchRunSummary | null>(null);
+  const [runSummary, setRunSummary] =
+    useState<PublicationSearchRunSummary | null>(null);
   const [audit, setAudit] = useState<PublicationSearchAudit | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
-  const [internationalFilter, setInternationalFilter] = useState<"all" | InternationalFlag>("true");
-  const [confidenceFilter, setConfidenceFilter] = useState<"all" | PublicationConfidence>("all");
+  const [internationalFilter, setInternationalFilter] = useState<
+    "all" | InternationalFlag
+  >("true");
+  const [confidenceFilter, setConfidenceFilter] = useState<
+    "all" | PublicationConfidence
+  >("all");
   const [countryFilter, setCountryFilter] = useState("all");
+  const [lmicFilter, setLmicFilter] = useState<LmicFilter>("all");
+  const [hideUnknownCountries, setHideUnknownCountries] = useState(false);
 
   useEffect(() => {
     try {
-      const loaded = loadStoredResults(sessionStorage.getItem(RESULTS_STORAGE_KEY));
+      const loaded = loadStoredResults(
+        sessionStorage.getItem(RESULTS_STORAGE_KEY),
+      );
       setResults(loaded.results);
       setRunSummary(loaded.runSummary);
       setAudit(loaded.audit);
@@ -221,7 +303,9 @@ export default function ResultsPage() {
       setResults([]);
       setRunSummary(null);
       setAudit(null);
-      setLoadError("Your browser blocked access to saved search results. Please run the search again.");
+      setLoadError(
+        "Your browser blocked access to saved search results. Please run the search again.",
+      );
     }
   }, []);
 
@@ -231,7 +315,9 @@ export default function ResultsPage() {
     }
 
     const parsedDate = new Date(`${date}T00:00:00`);
-    return Number.isNaN(parsedDate.getTime()) ? "Any date" : parsedDate.toLocaleDateString();
+    return Number.isNaN(parsedDate.getTime())
+      ? "Any date"
+      : parsedDate.toLocaleDateString();
   };
 
   const formatRunTimestamp = (timestamp: string) => {
@@ -250,29 +336,53 @@ export default function ResultsPage() {
     () =>
       results.filter((result) => {
         const internationalMatches =
-          internationalFilter === "all" || result.international_flag === internationalFilter;
+          internationalFilter === "all" ||
+          result.international_flag === internationalFilter;
         const confidenceMatches =
           confidenceFilter === "all" || result.confidence === confidenceFilter;
         const countries = splitCountries(result.international_countries);
-        const countryMatches = countryFilter === "all" || countries.includes(countryFilter);
+        const countryMatches =
+          countryFilter === "all" || countries.includes(countryFilter);
+        const lmicMatches =
+          lmicFilter === "all" ||
+          (lmicFilter === "yes" && result.has_lmic_country) ||
+          (lmicFilter === "no" && !result.has_lmic_country);
+        const unknownCountriesMatch =
+          !hideUnknownCountries || !hasOnlyUnknownCountries(result);
 
-        return internationalMatches && confidenceMatches && countryMatches;
+        return (
+          internationalMatches &&
+          confidenceMatches &&
+          countryMatches &&
+          lmicMatches &&
+          unknownCountriesMatch
+        );
       }),
-    [results, internationalFilter, confidenceFilter, countryFilter],
+    [
+      results,
+      internationalFilter,
+      confidenceFilter,
+      countryFilter,
+      lmicFilter,
+      hideUnknownCountries,
+    ],
   );
 
   const countryOptions = useMemo(() => {
     const countries = new Set<string>();
 
     results.forEach((result) => {
-      splitCountries(result.international_countries).forEach((country) => countries.add(country));
+      splitCountries(result.international_countries).forEach((country) =>
+        countries.add(country),
+      );
     });
 
     return [...countries].sort((a, b) => a.localeCompare(b));
   }, [results]);
 
   const internationalResultCount = useMemo(
-    () => results.filter((result) => result.international_flag === "true").length,
+    () =>
+      results.filter((result) => result.international_flag === "true").length,
     [results],
   );
 
@@ -309,12 +419,14 @@ export default function ResultsPage() {
     <section className="card">
       <h1 className="text-2xl font-bold text-slate-900">Results</h1>
       <p className="mt-2 text-sm text-slate-600">
-        Review hybrid PubMed-first publication matches and filter by international status and
-        confidence.
+        Review hybrid PubMed-first publication matches and filter by
+        international status and confidence.
       </p>
       {loadError ? (
         <div className="mt-4 rounded-md border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
-          <p className="font-semibold">We could not load the saved search results.</p>
+          <p className="font-semibold">
+            We could not load the saved search results.
+          </p>
           <p className="mt-1">{loadError}</p>
         </div>
       ) : null}
@@ -327,38 +439,66 @@ export default function ResultsPage() {
               {formatDateRange(runSummary.end_date)}
             </li>
             <li>Run time: {formatRunTimestamp(runSummary.run_timestamp)}</li>
-            <li>Faculty loaded: {runSummary.faculty_count_loaded ?? runSummary.faculty_count_searched}</li>
+            <li>
+              Faculty loaded:{" "}
+              {runSummary.faculty_count_loaded ??
+                runSummary.faculty_count_searched}
+            </li>
             <li>Faculty attempted: {runSummary.faculty_count_searched}</li>
-            <li>Faculty completed: {runSummary.faculty_count_completed ?? runSummary.faculty_count_searched}</li>
+            <li>
+              Faculty completed:{" "}
+              {runSummary.faculty_count_completed ??
+                runSummary.faculty_count_searched}
+            </li>
             <li>Faculty failed: {runSummary.faculty_count_failed ?? 0}</li>
             <li>Total results: {runSummary.result_count}</li>
             <li>International results: {internationalResultCount}</li>
-            <li>Faculty with international results: {facultyWithInternationalResultsCount}</li>
-            <li>Unique countries represented: {uniqueInternationalCountriesCount}</li>
+            <li>
+              Faculty with international results:{" "}
+              {facultyWithInternationalResultsCount}
+            </li>
+            <li>
+              Unique countries represented: {uniqueInternationalCountriesCount}
+            </li>
             <li>Search method: {runSummary.search_method}</li>
             {audit ? (
               <>
-                <li>First faculty attempted: {audit.first_faculty_attempted ?? "None"}</li>
-                <li>Last faculty attempted: {audit.last_faculty_attempted ?? "None"}</li>
+                <li>
+                  First faculty attempted:{" "}
+                  {audit.first_faculty_attempted ?? "None"}
+                </li>
+                <li>
+                  Last faculty attempted:{" "}
+                  {audit.last_faculty_attempted ?? "None"}
+                </li>
                 <li>Early exit reason: {audit.early_exit_reason ?? "None"}</li>
                 <li>Faculty with ORCID: {audit.faculty_with_orcid}</li>
-                <li>ORCID searches attempted: {audit.orcid_searches_attempted}</li>
+                <li>
+                  ORCID searches attempted: {audit.orcid_searches_attempted}
+                </li>
                 <li>ORCID PMIDs found: {audit.orcid_pmids_found}</li>
-                <li>Results confirmed by ORCID: {audit.results_confirmed_by_orcid}</li>
-                <li>Faculty with ORCID but no ORCID PMIDs: {audit.faculty_with_orcid_but_no_orcid_pmids}</li>
+                <li>
+                  Results confirmed by ORCID: {audit.results_confirmed_by_orcid}
+                </li>
+                <li>
+                  Faculty with ORCID but no ORCID PMIDs:{" "}
+                  {audit.faculty_with_orcid_but_no_orcid_pmids}
+                </li>
               </>
             ) : null}
           </ul>
         </div>
       ) : null}
 
-      <div className="mt-5 grid gap-4 md:grid-cols-3">
+      <div className="mt-5 grid gap-4 md:grid-cols-3 lg:grid-cols-5">
         <label className="text-sm text-slate-700">
           Filter by international_flag
           <select
             value={internationalFilter}
             onChange={(event) =>
-              setInternationalFilter(event.target.value as "all" | InternationalFlag)
+              setInternationalFilter(
+                event.target.value as "all" | InternationalFlag,
+              )
             }
             className="mt-2 block w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
           >
@@ -373,7 +513,11 @@ export default function ResultsPage() {
           Filter by confidence
           <select
             value={confidenceFilter}
-            onChange={(event) => setConfidenceFilter(event.target.value as "all" | PublicationConfidence)}
+            onChange={(event) =>
+              setConfidenceFilter(
+                event.target.value as "all" | PublicationConfidence,
+              )
+            }
             className="mt-2 block w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
           >
             <option value="all">All</option>
@@ -398,6 +542,31 @@ export default function ResultsPage() {
             ))}
           </select>
         </label>
+
+        <label className="text-sm text-slate-700">
+          Filter by LMIC
+          <select
+            value={lmicFilter}
+            onChange={(event) =>
+              setLmicFilter(event.target.value as LmicFilter)
+            }
+            className="mt-2 block w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
+          >
+            <option value="all">All</option>
+            <option value="yes">Yes</option>
+            <option value="no">No</option>
+          </select>
+        </label>
+
+        <label className="flex items-center gap-2 self-end text-sm text-slate-700">
+          <input
+            type="checkbox"
+            checked={hideUnknownCountries}
+            onChange={(event) => setHideUnknownCountries(event.target.checked)}
+            className="h-4 w-4 rounded border-slate-300 text-blue-600"
+          />
+          Hide unknown countries
+        </label>
       </div>
 
       <p className="mt-3 text-xs text-slate-500">
@@ -408,30 +577,52 @@ export default function ResultsPage() {
         <table className="min-w-full border-collapse text-sm">
           <thead>
             <tr className="border-b border-slate-200 bg-slate-100 text-left">
-              <th className="px-3 py-2 font-semibold text-slate-700">Faculty</th>
+              <th className="px-3 py-2 font-semibold text-slate-700">
+                Faculty
+              </th>
               <th className="px-3 py-2 font-semibold text-slate-700">Title</th>
-              <th className="px-3 py-2 font-semibold text-slate-700">Publication Date</th>
+              <th className="px-3 py-2 font-semibold text-slate-700">
+                Publication Date
+              </th>
               <th className="px-3 py-2 font-semibold text-slate-700">PMID</th>
-              <th className="px-3 py-2 font-semibold text-slate-700">international_flag</th>
-              <th className="px-3 py-2 font-semibold text-slate-700">international_countries</th>
+              <th className="px-3 py-2 font-semibold text-slate-700">
+                international_flag
+              </th>
+              <th className="px-3 py-2 font-semibold text-slate-700">
+                international_countries
+              </th>
               <th className="px-3 py-2 font-semibold text-slate-700">LMIC</th>
-              <th className="px-3 py-2 font-semibold text-slate-700">confidence</th>
-              <th className="px-3 py-2 font-semibold text-slate-700">ORCID used?</th>
-              <th className="px-3 py-2 font-semibold text-slate-700">ORCID match?</th>
-              <th className="px-3 py-2 font-semibold text-slate-700">Match source</th>
+              <th className="px-3 py-2 font-semibold text-slate-700">
+                confidence
+              </th>
+              <th className="px-3 py-2 font-semibold text-slate-700">
+                ORCID used?
+              </th>
+              <th className="px-3 py-2 font-semibold text-slate-700">
+                ORCID match?
+              </th>
+              <th className="px-3 py-2 font-semibold text-slate-700">
+                Match source
+              </th>
             </tr>
           </thead>
           <tbody>
             {filteredResults.length === 0 ? (
               <tr>
                 <td className="px-3 py-3 text-slate-500" colSpan={11}>
-                  No results yet. Run a publication search to populate this table.
+                  No results yet. Run a publication search to populate this
+                  table.
                 </td>
               </tr>
             ) : (
               filteredResults.map((result, index) => (
-                <tr key={`${result.PMID || "missing-pmid"}-${result.faculty_name}-${index}`} className="border-b border-slate-100">
-                  <td className="px-3 py-2 align-top text-slate-700">{result.faculty_name}</td>
+                <tr
+                  key={`${result.PMID || "missing-pmid"}-${result.faculty_name}-${index}`}
+                  className="border-b border-slate-100"
+                >
+                  <td className="px-3 py-2 align-top text-slate-700">
+                    {result.faculty_name}
+                  </td>
                   <td className="px-3 py-2 align-top text-slate-700">
                     {result.PMID ? (
                       <a
@@ -446,19 +637,33 @@ export default function ResultsPage() {
                       result.title
                     )}
                   </td>
-                  <td className="px-3 py-2 align-top text-slate-700">{result.publication_date}</td>
-                  <td className="px-3 py-2 align-top text-slate-700">{result.PMID || "Unknown"}</td>
-                  <td className="px-3 py-2 align-top text-slate-700">{result.international_flag}</td>
+                  <td className="px-3 py-2 align-top text-slate-700">
+                    {result.publication_date}
+                  </td>
+                  <td className="px-3 py-2 align-top text-slate-700">
+                    {result.PMID || "Unknown"}
+                  </td>
+                  <td className="px-3 py-2 align-top text-slate-700">
+                    {result.international_flag}
+                  </td>
                   <td className="px-3 py-2 align-top text-slate-700">
                     {result.international_countries || "Unknown"}
                   </td>
                   <td className="px-3 py-2 align-top text-slate-700">
                     {result.has_lmic_country ? "Yes" : "No"}
                   </td>
-                  <td className="px-3 py-2 align-top text-slate-700">{result.confidence}</td>
-                  <td className="px-3 py-2 align-top text-slate-700">{result.orcid_used ? "Yes" : "No"}</td>
-                  <td className="px-3 py-2 align-top text-slate-700">{result.orcid_match ? "Yes" : "No"}</td>
-                  <td className="px-3 py-2 align-top text-slate-700">{result.match_source}</td>
+                  <td className="px-3 py-2 align-top text-slate-700">
+                    {result.confidence}
+                  </td>
+                  <td className="px-3 py-2 align-top text-slate-700">
+                    {result.orcid_used ? "Yes" : "No"}
+                  </td>
+                  <td className="px-3 py-2 align-top text-slate-700">
+                    {result.orcid_match ? "Yes" : "No"}
+                  </td>
+                  <td className="px-3 py-2 align-top text-slate-700">
+                    {result.match_source}
+                  </td>
                 </tr>
               ))
             )}
